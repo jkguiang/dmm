@@ -109,4 +109,5 @@ if __name__ == "__main__":
     args = cli.parse_args()
 
     print("Starting DMM...")
-    dmm(args.host, args.port, args.authkey, n_workers=args.n_workers)
+    dmm = DMM(args.host, args.port, args.authkey, n_workers=args.n_workers)
+    dmm.start()
