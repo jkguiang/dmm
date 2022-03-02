@@ -37,7 +37,7 @@ class Link:
         self.dst_ipv6 = ""
         self.sense_link_id = "" # SENSE service instance UUID
         self.bandwidth = bandwidth
-        self.max_bandwidth = sense.get_theoretical_bandwidth(
+        self.theoretical_bandwidth = sense.get_theoretical_bandwidth(
             self.src_site.sense_name,
             self.dst_site.sense_name,
             self.src_ipv6,
@@ -45,13 +45,21 @@ class Link:
         )
         self.logs = [(time.time(), bandwidth, None, "init")]
 
+    def get_max_bandwidth(self):
+        return min(
+            self.src_site.get_uplink_provision(),
+            self.dst_site.get_uplink_provision(),
+            self.theoretical_bandwidth
+        )
+
     def update(self, new_bandwidth, msg=""):
-        # Update logs
-        actual_bandwidth = -1 # FIXME: add this
-        self.logs.append((time, new_bandwidth, actual_bandwidth, msg))
-        self.bandwidth = new_bandwidth
-        # Update SENSE link
-        sense.reprovision_link(self.sense_link_id, new_bandwidth)
+        if new_bandwidth != self.bandwidth:
+            # Update logs
+            actual_bandwidth = -1 # FIXME: add this
+            self.logs.append((time, new_bandwidth, actual_bandwidth, msg))
+            self.bandwidth = new_bandwidth
+            # Update SENSE link
+            sense.reprovision_link(self.sense_link_id, new_bandwidth)
 
     def open(self):
         if self.best_effort:
@@ -67,7 +75,6 @@ class Link:
                 self.dst_ipv6,
                 self.bandwidth
             )
-
         self.is_open = True
 
     def close(self):
@@ -81,11 +88,13 @@ class Link:
         self.is_open = False
 
 class Request:
-    def __init__(self, rucio_id, src_site, dst_site, priority, n_bytes_total, 
-                 n_transfers_total):
-        self.rucio_id = rucio_id
+    def __init__(self, src_site, dst_site, rucio_rule_id, rucio_request_id, priority, 
+                 n_bytes_total, n_transfers_total):
         self.src_site = src_site
         self.dst_site = dst_site
+        # Unpacked from payload[request_id]["attr"]
+        self.rucio_rule_id = rucio_rule_id
+        self.rucio_request_id = rucio_request_id
         self.priority = priority
         self.n_bytes_total = n_bytes_total
         self.n_transfers_total = n_transfers_total
@@ -100,8 +109,8 @@ class DMM:
         with open(authkey_file, "rb") as f_in:
             self.authkey = f_in.read()
         self.n_workers = n_workers
-        self.sites = []
-        self.requests_and_links = []
+        self.sites = {}
+        self.rules = {}
 
     def start(self):
         listener = Listener((self.host, self.port), authkey=self.authkey)
@@ -118,10 +127,10 @@ class DMM:
                 elif daemon == "FINISHER":
                     self.finisher_handler(payload)
 
-    def add_request_and_link(self, new_request, new_link):
+    def process_rule(self, new_request, new_link):
         # Find requests that share the same source and destination sites
         requests_to_update = [new_request]
-        for request, _ in self.requests_and_links:
+        for rule_id, (request, link) in self.rules:
             same_src = request.src_site.rse_name == new_request.src_site.rse_name
             same_dst = request.dst_site.rse_name == new_request.dst_site.rse_name
             if same_src and same_dst:
@@ -130,85 +139,65 @@ class DMM:
         priority_sum = sum([req.priority for req in requests])
         for request in requests_to_update:
             request.bandwidth_fraction = request.priority/priority_sum
-        # Update bandwidth provisions for all links
-        self.requests_and_links.append((new_request, new_link))
-        for i, (_, link) in self.requests_and_links:
-            max_bandwidth = min([
-                link.src_site.get_uplink_provision(),
-                link.dst_site.get_uplink_provision(),
-                link.max_bandwidth
-            ])
-            new_bandwidth = max_bandwidth*requests.bandwidth_fraction
-            if i < len(self.requests_and_links) - 1:
-                # Update the existing links
-                link.update(new_bandwidth, msg="accommodating new request")
-            else:
-                # Open the new link
-                link.bandwidth = new_bandwidth
-                link.open()
+        # Update bandwidth provisions for existing links
+        for rule_id, (request, link) in self.rules:
+            new_bandwidth = link.get_max_bandwidth()*request.bandwidth_fraction
+            link.update(new_bandwidth, msg="accommodating new request")
+        # Open new link
+        new_link.bandwidth = new_link.get_max_bandwidth()*new_request.bandwidth_fraction
+        new_link.open()
+        # Keep track of new rule
+        self.rules[new_request.rucio_rule_id] = (new_request, new_link)
 
     def preparer_handler(self, payload):
-        rse_names = [site.rse_name for site in self.sites]
-        for prepared_request in payload:
+        for rule_id, prepared_rule in payload.items():
+            if rule_id in self.rules.keys():
+                continue
             # Construct or retrieve source Site object
-            src_rse_name = prepared_request["src_rse_name"]
-            if src_rse_name not in rse_names:
+            src_rse_name = prepared_rule["src_rse_name"]
+            if src_rse_name not in self.sites.keys():
                 src_site = Site(src_rse_name)
-                self.sites.append(src_site)
+                self.sites[src_rse_name] = src_site
             else:
-                src_site = self.sites[rse_names.index(src_rse_name)]
+                src_site = self.sites[src_rse_name]
             # Construct or retrieve destination Site object
-            dst_rse_name = prepared_request["dst_rse_name"]
-            if dst_rse_name not in rse_names:
+            dst_rse_name = prepared_rule["dst_rse_name"]
+            if dst_rse_name not in self.sites.keys():
                 dst_site = Site(dst_rse_name)
-                self.sites.append(dst_site)
+                self.sites[dst_rse_name] = dst_site
             else:
-                dst_site = self.sites[rse_names.index(dst_rse_name)]
+                dst_site = self.sites[dst_rse_name]
             # Update partners set for each site
             src_site.partners.add(dst_site)
             dst_site.partners.add(src_site)
             # Create new Request and Link objects
-            request = Request(src_site, dst_site, **prepared_request["info"])
+            request = Request(src_site, dst_site, **prepared_rule["attr"])
             link = Link(src_site, dst_site, 0, best_effort=(request.priority > 0))
             # Compute new bandwidth provisions and open link
-            self.add_request_and_link(request, link)
+            self.process_rule(request, link)
         
 
     def submitter_handler(self, payload):
-        priority = payload.get("priority")
-        rse_pair_id = payload.get("rse_pair_id")
-        submitted_transfers = payload.get("submitted_transfers")
+        rucio_rule_id = payload.get("rucio_rule_id")
+        n_transfers_submitted = payload.get("n_transfers_submitted")
         # Fetch transfer metadata
-        transfer_data = self.cache[priority][rse_pair_id]
+        request, link = self.rules[rucio_rule_id]
         # Update counters
-        transfer_data["waiting_transfers"] -= submitted_transfers
-        transfer_data["active_transfers"] += submitted_transfers
-        # Get dummy SENSE links
-        sense.allocate_links(transfer_data)
-        src_ipv6, dst_ipv6 = sense.get_route_endpoints(priority, rse_pair_id)
-        transfer_data["sense_map"] = {
-            transfer_data["source_rse_id"]: src_ipv6,
-            transfer_data["dest_rse_id"]: dst_ipv6
+        request.n_transfers_submitted += submitted_transfers
+        # Get SENSE link endpoints
+        sense_map = {
+            link.src_site.rse_name: link.src_ipv6,
+            link.dst_site.rse_name: link.dst_ipv6
         }
-        # Update cache
-        self.cache[priority][rse_pair_id].update(transfer_data)
-        return transfer_data["sense_map"]
+        return sense_map
 
     def finisher_handler(self, payload):
-        for priority, updated_jobs in payload.items():
-            active_jobs = self.cache[priority]
-            for rse_pair_id, updated_data in updated_jobs.items():
-                transfer_data = active_jobs[rse_pair_id]
-                transfer_data["transferred_bytes"] += updated_data["transferred_bytes"]
-                transfer_data["active_transfers"] -= updated_data["finished_transfers"]
-                transfer_data["finished_transfers"] += updated_data["finished_transfers"]
-                if transfer_data["finished_transfers"] == transfer_data["total_transfers"]:
-                    sense.free_links(priority, rse_pair_id)
-                    active_jobs.pop(rse_pair_id)
-            if active_jobs == {}:
-                self.cache.pop(priority)
-            else:
-                self.cache[priority] = active_jobs
+        for rule_id, finisher_report in payload.items():
+            request, link = self.rules[rule_id]
+            request.n_transfers_finished += finisher_report["n_transfers_finished"]
+            request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
+            if request.n_transfers_finished == request.n_transfers_total:
+                link.close()
 
 if __name__ == "__main__":
     cli = argparse.ArgumentParser(description="Rucio-SENSE data movement manager")
