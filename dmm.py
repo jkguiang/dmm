@@ -56,7 +56,7 @@ class Link:
         if new_bandwidth != self.bandwidth:
             # Update logs
             actual_bandwidth = -1 # FIXME: add this
-            self.logs.append((time, new_bandwidth, actual_bandwidth, msg))
+            self.logs.append((time.time(), new_bandwidth, actual_bandwidth, msg))
             self.bandwidth = new_bandwidth
             # Update SENSE link
             sense.reprovision_link(self.sense_link_id, new_bandwidth)
@@ -92,7 +92,7 @@ class Request:
                  n_bytes_total, n_transfers_total):
         self.src_site = src_site
         self.dst_site = dst_site
-        # Unpacked from payload[request_id]["attr"]
+        # Unpacked from prepared_rule["attr"]
         self.rucio_rule_id = rucio_rule_id
         self.rucio_request_id = rucio_request_id
         self.priority = priority
@@ -175,7 +175,6 @@ class DMM:
             link = Link(src_site, dst_site, 0, best_effort=(request.priority > 0))
             # Compute new bandwidth provisions and open link
             self.process_rule(request, link)
-        
 
     def submitter_handler(self, payload):
         rucio_rule_id = payload.get("rucio_rule_id")
