@@ -22,6 +22,3 @@ class SQLSession(object):
         self.session.delete(transfer)
         self.session.commit()
         # Add check to make sure entry has been deleted
-
-# TODO
-# Query db
