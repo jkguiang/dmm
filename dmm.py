@@ -1,6 +1,9 @@
 import nonsense as sense
 import argparse
 import time
+import sys
+import signal
+import logging
 from multiprocessing.connection import Listener
 
 class Site:
@@ -109,15 +112,30 @@ class DMM:
         self.sites = {}
         self.rules = {}
 
+    def __dump(self):
+        for rule_id, (rule, link) in self.rules.items():
+            logging.debug(
+                f"Rule({rule.rule_id}) | "
+                f"{link.src_site.rse_name} --> {link.dst_site.rse_name} "
+                f"{link.bandwidth} Mb/s"
+            )
+
+    def stop(self):
+        # Placeholder for func that joins/closes workers
+        # Should also probably close all SENSE links
+        return
+
     def start(self):
         listener = Listener((self.host, self.port), authkey=self.authkey)
         while True:
-            print("waiting for the next connection")
+            logging.info("Waiting for the next connection")
             with listener.accept() as connection:
-                print("connection accepted from", listener.last_accepted)
+                client_host, client_port = listener.last_accepted
+                logging.info(f"Connection accepted from {client_host}:{client_port}")
                 daemon, payload = connection.recv()
                 if daemon == "PREPARER":
                     self.preparer_handler(payload)
+                    self.__dump()
                 elif daemon == "SUBMITTER":
                     result = self.submitter_handler(payload)
                     connection.send(result)
@@ -127,7 +145,7 @@ class DMM:
     def process_rule(self, new_rule, new_link):
         # Find rules that share the same source and destination sites
         rules_to_update = [new_rule]
-        for rule_id, (rule, link) in self.rules:
+        for rule_id, (rule, link) in self.rules.items():
             same_src = rule.src_site.rse_name == new_rule.src_site.rse_name
             same_dst = rule.dst_site.rse_name == new_rule.dst_site.rse_name
             if same_src and same_dst:
@@ -137,7 +155,7 @@ class DMM:
         for rule in rules_to_update:
             rule.bandwidth_fraction = rule.priority/priority_sum
         # Update bandwidth provisions for existing links
-        for rule_id, (rule, link) in self.rules:
+        for rule_id, (rule, link) in self.rules.items():
             new_bandwidth = link.get_max_bandwidth()*rule.bandwidth_fraction
             link.update(new_bandwidth, msg="accommodating new rule")
         # Open new link
@@ -199,6 +217,13 @@ class DMM:
         if rule.n_transfers_finished == rule.n_transfers_total:
             link.close()
 
+def sigint_handler(dmm):
+    def actual_handler(sig, frame):
+        logging.info("Stopping DMM")
+        dmm.stop()
+        sys.exit(0)
+    return actual_handler
+
 if __name__ == "__main__":
     cli = argparse.ArgumentParser(description="Rucio-SENSE data movement manager")
     cli.add_argument(
@@ -217,8 +242,28 @@ if __name__ == "__main__":
         "-n", "--n_workers", type=int, default=4, 
         help="maximum number of worker processes"
     )
+    cli.add_argument(
+        "--loglevel", type=str, default="WARNING", 
+        help="log level: DEBUG, INFO, WARNING (default), or ERROR"
+    )
+    cli.add_argument(
+        "--logfile", type=str, default="dmm.log", 
+        help="path to log file (default: ./dmm.log)"
+    )
     args = cli.parse_args()
 
-    print("Starting DMM...")
+    handlers = [logging.FileHandler(filename=args.logfile)]
+    if args.loglevel == "DEBUG":
+        handlers.append(logging.StreamHandler(sys.stdout))
+
+    logging.basicConfig(
+        format="%(levelname)s [%(asctime)s]: %(message)s",
+        datefmt="%m-%d-%Y %H:%M:%S %p",
+        level=getattr(logging, args.loglevel.upper()),
+        handlers=handlers
+    )
+
+    logging.info("Starting DMM")
     dmm = DMM(args.host, args.port, args.authkey, n_workers=args.n_workers)
+    signal.signal(signal.SIGINT, sigint_handler(dmm))
     dmm.start()
