@@ -1,5 +1,6 @@
 import nonsense as sense
 import argparse
+import time
 from multiprocessing.connection import Listener
 
 class Site:
@@ -8,7 +9,7 @@ class Site:
         self.sense_name = sense.get_uri(rse_name)
         self.free_ipv6_pool = sense.get_ipv6_pool(self.sense_name)
         self.used_ipv6_pool = []
-        self.default_ipv6 = self.ipv6_pool.pop(0) # reserve an ipv6 for best effort service
+        self.default_ipv6 = self.free_ipv6_pool.pop(0) # reserve an ipv6 for best effort service
         self.total_uplink_capacity = sense.get_uplink_capacity(self.sense_name)
         self.partners = set()
 
@@ -28,7 +29,7 @@ class Site:
         free_ipv6_pool.append(ipv6)
 
 class Link:
-    def __init__(self, src_site, dst_site, bandwidth, best_effort=False):
+    def __init__(self, src_site, dst_site, bandwidth=0, best_effort=False):
         self.src_site = src_site
         self.dst_site = dst_site
         self.best_effort = best_effort
@@ -37,12 +38,7 @@ class Link:
         self.dst_ipv6 = ""
         self.sense_link_id = "" # SENSE service instance UUID
         self.bandwidth = bandwidth
-        self.theoretical_bandwidth = sense.get_theoretical_bandwidth(
-            self.src_site.sense_name,
-            self.dst_site.sense_name,
-            self.src_ipv6,
-            self.dst_ipv6,
-        )
+        self.theoretical_bandwidth = sense.get_theoretical_bandwidth(sense.PROFILE_UUID)
         self.logs = [(time.time(), bandwidth, None, "init")]
 
     def get_max_bandwidth(self):
@@ -52,7 +48,7 @@ class Link:
             self.theoretical_bandwidth
         )
 
-    def update(self, new_bandwidth, msg=""):
+    def update(self, new_bandwidth):
         if new_bandwidth != self.bandwidth:
             # Update logs
             actual_bandwidth = -1 # FIXME: add this
@@ -63,11 +59,11 @@ class Link:
 
     def open(self):
         if self.best_effort:
-            self.src_ipv6 = src_site.default_ipv6()
-            self.dst_ipv6 = dst_site.default_ipv6()
+            self.src_ipv6 = self.src_site.default_ipv6
+            self.dst_ipv6 = self.dst_site.default_ipv6
         else:
-            self.src_ipv6 = src_site.reserve_ipv6()
-            self.dst_ipv6 = dst_site.reserve_ipv6()
+            self.src_ipv6 = self.src_site.reserve_ipv6()
+            self.dst_ipv6 = self.dst_site.reserve_ipv6()
             self.sense_link_id = sense.build_link(
                 self.src_site.sense_name,
                 self.dst_site.sense_name,
@@ -97,6 +93,7 @@ class Rule:
         self.request_ids = request_ids
         self.priority = priority
         self.n_bytes_total = n_bytes_total
+        self.n_bytes_transferred = 0
         self.n_transfers_total = n_transfers_total
         self.n_transfers_submitted = 0
         self.n_transfers_finished = 0
@@ -136,7 +133,7 @@ class DMM:
             if same_src and same_dst:
                 rules_to_update.append(rule)
         # Update relative priority for these rules
-        priority_sum = sum([rule.priority for rule in rules])
+        priority_sum = sum([rule.priority for rule in rules_to_update])
         for rule in rules_to_update:
             rule.bandwidth_fraction = rule.priority/priority_sum
         # Update bandwidth provisions for existing links
@@ -172,7 +169,7 @@ class DMM:
             dst_site.partners.add(src_site)
             # Create new Rule and Link objects
             rule = Rule(rule_id, src_site, dst_site, **prepared_rule["attr"])
-            link = Link(src_site, dst_site, 0, best_effort=(rule.priority > 0))
+            link = Link(src_site, dst_site, best_effort=(rule.priority > 0))
             # Compute new bandwidth provisions and open link
             self.process_rule(rule, link)
 
@@ -182,7 +179,7 @@ class DMM:
         n_transfers_submitted = payload.get("n_transfers_submitted")
         # Update rule
         rule, link = self.rules[rule_id]
-        rule.n_transfers_submitted += submitted_transfers
+        rule.n_transfers_submitted += n_transfers_submitted
         # Get SENSE link endpoints
         sense_map = {
             link.src_site.rse_name: link.src_ipv6,
