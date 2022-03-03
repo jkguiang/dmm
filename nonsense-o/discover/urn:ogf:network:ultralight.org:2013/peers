@@ -1,0 +1,15 @@
+{
+    "domain_uri": "urn:ogf:network:ultralight.org:2013",
+    "domain_name": "n/a",
+    "peer_points": [
+        {
+            "port_name": "n/a",
+            "port_uri": "urn:ogf:network:ultralight.org:2013:dellos9_s0:hundredGigE_1-7",
+            "peer_capacity": "n/a",
+            "peer_vlan_pool": "n/a",
+            "port_vlan_pool": "1779-1799,3600-3619,3985-3989",
+            "port_capacity": "40000000000",
+            "peer_uri": "urn:ogf:network:lsanca.pacificwave.net:2016:lax-agg10:ultralight"
+        }
+    ]
+}

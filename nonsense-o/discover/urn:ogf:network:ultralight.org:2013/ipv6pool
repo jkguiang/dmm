@@ -1,0 +1,10 @@
+{
+    "domain_uri": "urn:ogf:network:ultralight.org:2013",
+    "routing": [
+        {
+            "ipv6_subnet_pool": "fc00::0010/124,fc00::0020/124,fc00::0030/124,fc00::0040/124,fc00::0050/124",
+            "service_uri": "n/a"
+        }
+    ],
+    "domain_name": "urn:ogf:network:ultralight.org:2013:dellos9_s0:service+rst-ipv6:ipv6-floatingip-pool"
+}
