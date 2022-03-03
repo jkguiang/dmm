@@ -5,6 +5,8 @@ Name-Only Nonfunctional Software defined networking (SDN) for End-to-end Network
 Science at the Exascale 
 """
 
+PROFILE_UUID = "dummy_profile_uuid"
+
 DUMMY_LINK = "127.0.0.1"
 
 def get_ipv6_pool(uri):
