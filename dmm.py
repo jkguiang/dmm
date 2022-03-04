@@ -94,14 +94,14 @@ class Link:
         self.is_open = False
 
 class Request:
-    def __init__(self, request_id, rule_id, src_site, dst_site, request_ids, priority, 
+    def __init__(self, request_id, rule_id, src_site, dst_site, transfer_ids, priority, 
                  n_bytes_total, n_transfers_total):
         self.request_id = request_id
         self.rule_id = rule_id
         self.src_site = src_site
         self.dst_site = dst_site
         # Unpacked from prepared_request["attr"]
-        self.request_ids = request_ids
+        self.transfer_ids = transfer_ids
         self.priority = priority
         self.n_bytes_total = n_bytes_total
         self.n_bytes_transferred = 0
@@ -234,18 +234,18 @@ class DMM:
         return sense_map
 
     def finisher_handler(self, payload):
-        # Unpack payload
         rule_id = payload.get("rule_id")
-        src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
-        n_transfers_finished = payload.get("n_transfers_finished")
-        n_bytes_transferred = payload.get("n_bytes_transferred")
-        # Update request
-        request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
-        request, link = self.requests[request_id]
-        request.n_transfers_finished += n_transfers_finished
-        request.n_bytes_transferred += n_bytes_transferred
-        if request.n_transfers_finished == request.n_transfers_total:
-            link.close()
+        finisher_reports = payload.get("finisher_reports")
+        for rse_pair_id, finisher_report in finisher_reports.items():
+            # Get request ID
+            src_rse_name, dst_rse_name = rse_pair_id.split("&")
+            request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+            # Update request
+            request, link = self.requests[request_id]
+            request.n_transfers_finished += finisher_report["n_transfers_finished"]
+            request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
+            if request.n_transfers_finished == request.n_transfers_total:
+                link.close()
 
 def sigint_handler(dmm):
     def actual_handler(sig, frame):
