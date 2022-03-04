@@ -234,18 +234,17 @@ class DMM:
         return sense_map
 
     def finisher_handler(self, payload):
-        rule_id = payload.get("rule_id")
-        finisher_reports = payload.get("finisher_reports")
-        for rse_pair_id, finisher_report in finisher_reports.items():
-            # Get request ID
-            src_rse_name, dst_rse_name = rse_pair_id.split("&")
-            request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
-            # Update request
-            request, link = self.requests[request_id]
-            request.n_transfers_finished += finisher_report["n_transfers_finished"]
-            request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
-            if request.n_transfers_finished == request.n_transfers_total:
-                link.close()
+        for rule_id, finisher_reports in payload.items():
+            for rse_pair_id, finisher_report in finisher_reports.items():
+                # Get request ID
+                src_rse_name, dst_rse_name = rse_pair_id.split("&")
+                request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+                # Update request
+                request, link = self.requests[request_id]
+                request.n_transfers_finished += finisher_report["n_transfers_finished"]
+                request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
+                if request.n_transfers_finished == request.n_transfers_total:
+                    link.close()
 
 def sigint_handler(dmm):
     def actual_handler(sig, frame):
