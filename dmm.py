@@ -23,13 +23,13 @@ class Site:
         self.total_uplink_capacity = sense.get_uplink_capacity(self.sense_name)
 
     def reserve_ipv6(self):
-        ipv6 = free_ipv6_pool.pop(0)
-        used_ipv6_pool.append(ipv6)
+        ipv6 = self.free_ipv6_pool.pop(0)
+        self.used_ipv6_pool.append(ipv6)
         return ipv6
 
     def free_ipv6(self, ipv6):
-        used_ipv6_pool.remove(ipv6)
-        free_ipv6_pool.append(ipv6)
+        self.used_ipv6_pool.remove(ipv6)
+        self.free_ipv6_pool.append(ipv6)
 
 class Link:
     def __init__(self, src_site, dst_site, bandwidth=0, best_effort=False):
@@ -41,17 +41,24 @@ class Link:
         self.dst_ipv6 = ""
         self.sense_link_id = "" # SENSE service instance UUID
         self.bandwidth = bandwidth
-        self.theoretical_bandwidth = sense.get_theoretical_bandwidth(sense.PROFILE_UUID)
         self.logs = [(time.time(), bandwidth, None, "init")]
+
+    def get_theoretical_bandwidth(self):
+        return sense.get_theoretical_bandwidth(
+            self.src_site.sense_name,
+            self.dst_site.sense_name,
+            self.src_ipv6,
+            self.dst_ipv6
+        )
 
     def get_max_bandwidth(self):
         return min(
             self.src_site.get_uplink_provision(),
             self.dst_site.get_uplink_provision(),
-            self.theoretical_bandwidth
+            self.get_theoretical_bandwidth()
         )
 
-    def update(self, new_bandwidth):
+    def update(self, new_bandwidth, msg):
         if new_bandwidth != self.bandwidth:
             # Update logs
             actual_bandwidth = -1 # FIXME: add this
@@ -86,13 +93,14 @@ class Link:
         self.dst_ipv6 = ""
         self.is_open = False
 
-class Rule:
-    def __init__(self, rule_id, src_site, dst_site, request_ids, priority, 
+class Request:
+    def __init__(self, request_id, rule_id, src_site, dst_site, request_ids, priority, 
                  n_bytes_total, n_transfers_total):
+        self.request_id = request_id
         self.rule_id = rule_id
         self.src_site = src_site
         self.dst_site = dst_site
-        # Unpacked from prepared_rule["attr"]
+        # Unpacked from prepared_request["attr"]
         self.request_ids = request_ids
         self.priority = priority
         self.n_bytes_total = n_bytes_total
@@ -102,6 +110,9 @@ class Rule:
         self.n_transfers_finished = 0
         self.bandwidth_fraction = 0.
 
+    def __str__(self):
+        return f"Request({self.request_id})"
+
 class DMM:
     def __init__(self, host, port, authkey_file, n_workers=4):
         self.host = host
@@ -110,19 +121,25 @@ class DMM:
             self.authkey = f_in.read()
         self.n_workers = n_workers
         self.sites = {}
-        self.rules = {}
+        self.requests = {}
+
+    def __get_request_id(self, rule_id, src_rse_name, dst_rse_name):
+        return f"{rule_id}_{src_rse_name}_{dst_rse_name}"
 
     def __dump(self):
-        for rule_id, (rule, link) in self.rules.items():
+        for request_id, (request, link) in self.requests.items():
             logging.debug(
-                f"Rule({rule.rule_id}) | "
+                f"{request} | "
                 f"{link.src_site.rse_name} --> {link.dst_site.rse_name} "
                 f"{link.bandwidth} Mb/s"
             )
 
     def stop(self):
-        # Placeholder for func that joins/closes workers
-        # Should also probably close all SENSE links
+        """
+        Placeholder; should eventually do the following:
+          - join/close all worker processes
+          - close all SENSE links(?)
+        """
         return
 
     def start(self):
@@ -132,6 +149,7 @@ class DMM:
             with listener.accept() as connection:
                 client_host, client_port = listener.last_accepted
                 logging.info(f"Connection accepted from {client_host}:{client_port}")
+                # Process payload from new connection
                 daemon, payload = connection.recv()
                 if daemon == "PREPARER":
                     self.preparer_handler(payload)
@@ -142,62 +160,72 @@ class DMM:
                 elif daemon == "FINISHER":
                     self.finisher_handler(payload)
 
-    def process_rule(self, new_rule, new_link):
-        # Find rules that share the same source and destination sites
-        rules_to_update = [new_rule]
-        for rule_id, (rule, link) in self.rules.items():
-            same_src = rule.src_site.rse_name == new_rule.src_site.rse_name
-            same_dst = rule.dst_site.rse_name == new_rule.dst_site.rse_name
+    def process_request(self, new_request, new_link):
+        # Find requests that share the same source and destination sites
+        requests_to_update = [new_request]
+        for request_id, (request, link) in self.requests.items():
+            same_src = request.src_site.rse_name == new_request.src_site.rse_name
+            same_dst = request.dst_site.rse_name == new_request.dst_site.rse_name
             if same_src and same_dst:
-                rules_to_update.append(rule)
-        # Update relative priority for these rules
-        priority_sum = sum([rule.priority for rule in rules_to_update])
-        for rule in rules_to_update:
-            rule.bandwidth_fraction = rule.priority/priority_sum
+                requests_to_update.append(request)
+        # Update relative priority for these requests
+        priority_sum = sum([request.priority for request in requests_to_update])
+        for request in requests_to_update:
+            request.bandwidth_fraction = request.priority/priority_sum
         # Update bandwidth provisions for existing links
-        for rule_id, (rule, link) in self.rules.items():
-            new_bandwidth = link.get_max_bandwidth()*rule.bandwidth_fraction
-            link.update(new_bandwidth, msg="accommodating new rule")
+        for request_id, (request, link) in self.requests.items():
+            new_bandwidth = link.get_max_bandwidth()*request.bandwidth_fraction
+            link.update(new_bandwidth, msg="accommodating new request")
         # Open new link
-        new_link.bandwidth = new_link.get_max_bandwidth()*new_rule.bandwidth_fraction
+        new_link.bandwidth = new_link.get_max_bandwidth()*new_request.bandwidth_fraction
         new_link.open()
-        # Keep track of new rule
-        self.rules[new_rule.rule_id] = (new_rule, new_link)
+        # Store new request and its corresponding link
+        self.requests[new_request.request_id] = (new_request, new_link)
 
     def preparer_handler(self, payload):
         for rule_id, prepared_rule in payload.items():
-            if rule_id in self.rules.keys():
-                continue
-            # Construct or retrieve source Site object
-            src_rse_name = prepared_rule["src_rse_name"]
-            if src_rse_name not in self.sites.keys():
-                src_site = Site(src_rse_name)
-                self.sites[src_rse_name] = src_site
-            else:
-                src_site = self.sites[src_rse_name]
-            # Construct or retrieve destination Site object
-            dst_rse_name = prepared_rule["dst_rse_name"]
-            if dst_rse_name not in self.sites.keys():
-                dst_site = Site(dst_rse_name)
-                self.sites[dst_rse_name] = dst_site
-            else:
-                dst_site = self.sites[dst_rse_name]
-            # Update partners set for each site
-            src_site.partners.add(dst_site)
-            dst_site.partners.add(src_site)
-            # Create new Rule and Link objects
-            rule = Rule(rule_id, src_site, dst_site, **prepared_rule["attr"])
-            link = Link(src_site, dst_site, best_effort=(rule.priority > 0))
-            # Compute new bandwidth provisions and open link
-            self.process_rule(rule, link)
+            for rse_pair_id, request_attr in prepared_rule.items():
+                src_rse_name, dst_rse_name = rse_pair_id.split("&")
+                # Check if request has already been processed
+                request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+                if request_id in self.requests.keys():
+                    continue
+                # Construct or retrieve source Site object
+                if src_rse_name not in self.sites.keys():
+                    src_site = Site(src_rse_name)
+                    self.sites[src_rse_name] = src_site
+                else:
+                    src_site = self.sites[src_rse_name]
+                # Construct or retrieve destination Site object
+                if dst_rse_name not in self.sites.keys():
+                    dst_site = Site(dst_rse_name)
+                    self.sites[dst_rse_name] = dst_site
+                else:
+                    dst_site = self.sites[dst_rse_name]
+                # Update partners set for each site
+                src_site.partners.add(dst_site)
+                dst_site.partners.add(src_site)
+                # Create new Rule and Link objects
+                request = Request(
+                    request_id,
+                    rule_id, 
+                    src_site, 
+                    dst_site, 
+                    **request_attr
+                )
+                link = Link(src_site, dst_site, best_effort=(request.priority == 0))
+                # Compute new bandwidth provisions and open link
+                self.process_request(request, link)
 
     def submitter_handler(self, payload):
         # Unpack payload
         rule_id = payload.get("rule_id")
+        src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
         n_transfers_submitted = payload.get("n_transfers_submitted")
-        # Update rule
-        rule, link = self.rules[rule_id]
-        rule.n_transfers_submitted += n_transfers_submitted
+        # Update request
+        request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+        request, link = self.requests[request_id]
+        request.n_transfers_submitted += n_transfers_submitted
         # Get SENSE link endpoints
         sense_map = {
             link.src_site.rse_name: link.src_ipv6,
@@ -208,13 +236,15 @@ class DMM:
     def finisher_handler(self, payload):
         # Unpack payload
         rule_id = payload.get("rule_id")
+        src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
         n_transfers_finished = payload.get("n_transfers_finished")
         n_bytes_transferred = payload.get("n_bytes_transferred")
-        # Update rule
-        rule, link = self.rules[rule_id]
-        rule.n_transfers_finished += n_transfers_finished
-        rule.n_bytes_transferred += n_bytes_transferred
-        if rule.n_transfers_finished == rule.n_transfers_total:
+        # Update request
+        request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+        request, link = self.requests[request_id]
+        request.n_transfers_finished += n_transfers_finished
+        request.n_bytes_transferred += n_bytes_transferred
+        if request.n_transfers_finished == request.n_transfers_total:
             link.close()
 
 def sigint_handler(dmm):
