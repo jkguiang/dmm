@@ -4,7 +4,7 @@ import time
 
 m = MonitoringSession()
 host_ip = '172.19.0.1' 
-site_name = 'pi.aashayarora.com:9100'
+site_name = 'T2_US_TEST'
 
 try:
     m.get_total_data_transferred(host_ip, site_name, time.time()-1000)
