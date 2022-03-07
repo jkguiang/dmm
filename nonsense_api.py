@@ -45,11 +45,11 @@ def __get_rooturi(full_uri):
             response = response[:-1]
     return response
 
-def get_theoretical_bandwidth(src_uri, dst_uri, src_ipv6, dst_ipv6):
+def get_theoretical_bandwidth(src_uri, dst_uri):
     return 10**15
 
 def build_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth):
-    return "dummy_instance_uuid"
+    return "dummy_instance_uuid", 0
 
 def reprovision_link(instance_uuid, new_bandwidth):
     return
