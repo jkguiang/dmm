@@ -39,13 +39,13 @@ class MonitoringSession(object):
             raise Exception("IPv6 DNE")
         at_start, at_end = 0, 0
         start_query = self.query_builder(
-            metric='node_network_transmit_bytes_total{device=\"%s\",instance=\"%s\"}' % (self.dev_map[source_ipv6], site_name),
+            metric='node_network_transmit_bytes_total{device=\"%s\",job=\"%s\"}' % (self.dev_map[source_ipv6], site_name),
             time=start_time)
         start_response = self.session.get(self.prometheus_addr + '/api/v1/query', params=start_query).json()
         if start_response['status'] == 'success':
             at_start = self.get_val_from_response(start_response)
         end_query = self.query_builder(
-            metric='node_network_transmit_bytes_total{device=\"%s\",instance=\"%s\"}' % (self.dev_map[source_ipv6], site_name),
+            metric='node_network_transmit_bytes_total{device=\"%s\",job=\"%s\"}' % (self.dev_map[source_ipv6], site_name),
             time=end_time)
         end_response = self.session.get(self.prometheus_addr + '/api/v1/query', params=end_query).json()
         if end_response['status'] == 'success':
