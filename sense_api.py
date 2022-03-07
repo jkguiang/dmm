@@ -81,6 +81,7 @@ def build_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth):
             {
                 "ask": "edit", 
                 "options": [
+                    # TODO: add IPv6 assignment
                     {"data.connections[0].bandwidth.qos_class": "guaranteedCapped"},
                     {"data.connections[0].bandwidth.capacity": str(bandwidth)},
                     {"data.connections[0].terminals[0].uri": src_uri},
@@ -96,11 +97,11 @@ def build_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth):
     # Provision bandwidth
     workflow_api.instance_operate("provision", sync="true")
     status = workflow_api.instance_get_status()
-    # TODO: test this! but add delete, reprovision first
     return si_uuid, status
 
 def reprovision_link(instance_uuid, new_bandwidth):
     workflow_api = WorkflowCombinedApi()
+    # TODO: add actual edit/reprovisioning of bandwidth
     status = workflow_api.instance_get_status(si_uuid=instance_uuid)
     if "error" in status:
         raise ValueError(status)
@@ -115,8 +116,8 @@ def reprovision_link(instance_uuid, new_bandwidth):
         )
     else:     
         workflow_api.instance_operate("reprovision", si_uuid=instance_uuid, sync="true")
-    status = workflow_api.instance_get_status(si_uuid=instance_uuid)
-    return
+
+    return workflow_api.instance_get_status(si_uuid=instance_uuid)
 
 def delete_link(instance_uuid):
     workflow_api = WorkflowCombinedApi()
@@ -136,4 +137,5 @@ def delete_link(instance_uuid):
         workflow_api.instance_delete(si_uuid=instance_uuid)
     else:
         print(f"cancel operation disrupted - instance not deleted - contact admin")
+
     return workflow_api.instance_get_status(si_uuid=instance_uuid)
