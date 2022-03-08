@@ -6,48 +6,56 @@ from sense.client.discover_api import DiscoverApi
 PROFILE_UUID = "ddd1dec0-83ab-4d08-bca6-9a83334cd6db"
 
 def get_ipv6_pool(uri):
-    """
-    GET /discover/URI/ipv6pool
+    """Return a list of IPv6 subnets at given site
+
+    Note: not fully supported by SENSE yet
     """
     discover_api = DiscoverApi()
     response = discover_api.discover_domain_id_ipv6pool_get(uri)
     if len(response) == 0 or "ERROR" in response:
         raise ValueError(f"Discover query failed for {uri}")
-    ipv6_pool = response["routing"][0]["ipv6_subnet_pool"].split(",")
-    ipv6_pool = ["127.0.0.1" for ipv6 in ipv6_pool] # FIXME: delete this when testbed exists
-    return ipv6_pool
+    else:
+        response = json.loads(response)
+        return response["routing"][0]["ipv6_subnet_pool"].split(",")
 
 def get_uplink_capacity(uri):
-    """
-    GET /discover/URI/peers
-    """
+    """Return the maximum uplink capacity in Mb/s for a given site"""
     discover_api = DiscoverApi()
     response = discover_api.discover_domain_id_peers_get(uri)
     if len(response) == 0 or "ERROR" in response:
         raise ValueError(f"Discover query failed for {uri}")
-    return float(response["peer_points"][0]["port_capacity"])
+    else:
+        response = json.loads(response)
+        return float(response["peer_points"][0]["port_capacity"])
 
-def get_uri(rse_name):
-    """
-    GET /discover/lookup/RSE_NAME
-    """
+def get_uri(rse_name, full=False):
+    """Return the root SENSE URI for a given Rucio RSE"""
     discover_api = DiscoverApi()
     response = discover_api.discover_lookup_name_get(rse_name)
     if len(response) == 0 or "ERROR" in response:
         raise ValueError(f"Discover query failed for {rse_name}")
-    return __get_rooturi(response["results"][0]["resource"])
+    else:
+        response = json.loads(response)
+        full_uri = response["results"][0]["resource"]
+        if full:
+            return full_uri
+        else:
+            return __get_rooturi(full_uri)
 
 def __get_rooturi(full_uri):
-    """
-    GET /discover/lookup/FULL_URI/rooturi
-    """
+    """Return the root SENSE URI for a given full SENSE URI"""
     discover_api = DiscoverApi()
     uri = discover_api.discover_lookup_rooturi_get(full_uri)
     if len(uri) == 0 or "ERROR" in uri:
         raise ValueError(f"Discover query failed for {full_uri}")
-    return uri
+    else:
+        return uri
 
 def get_theoretical_bandwidth(src_uri, dst_uri):
+    """Return the maximum theoretical bandwidth available between two sites
+
+    Note: not fully supported by SENSE yet
+    """
     workflow_api = WorkflowCombinedApi()
     workflow_api.instance_new()
     # Create service instance
@@ -58,7 +66,7 @@ def get_theoretical_bandwidth(src_uri, dst_uri):
                 "ask": "edit", 
                 "options": [
                     {"data.connections[0].terminals[0].uri": src_uri},
-                    {"data.connections[0].terminals[1].uri": dst_uri},
+                    {"data.connections[0].terminals[1].uri": dst_uri}
                 ]
             },
             {
@@ -69,9 +77,16 @@ def get_theoretical_bandwidth(src_uri, dst_uri):
     }
     # Query SENSE and extract theoretical bandwidth from its response
     response = workflow_api.instance_create(json.dumps(intent))
-    return int(response["results"][0]["bandwidth"])
+    if len(response) == 0 or "ERROR" in response:
+        raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
+    else:
+        response = json.loads(response)
+        for query in response["queries"]:
+            if query["asked"] == "maximum-bandwidth":
+                return int(query["results"][0]["bandwidth"])
 
-def build_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth):
+def create_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, alias=""):
+    """Create a SENSE guaranteed-bandwidth link between two sites"""
     workflow_api = WorkflowCombinedApi()
     workflow_api.instance_new()
     # Create service instance
@@ -81,45 +96,35 @@ def build_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth):
             {
                 "ask": "edit", 
                 "options": [
-                    # TODO: add IPv6 assignment
+                    # Bandwidth (QOS == Quality of Service)
                     {"data.connections[0].bandwidth.qos_class": "guaranteedCapped"},
                     {"data.connections[0].bandwidth.capacity": str(bandwidth)},
+                    # Source
                     {"data.connections[0].terminals[0].uri": src_uri},
                     {"data.connections[0].terminals[0].assign_ip": "true"},
+                    {"data.connections[0].terminals[0].ipv6_prefix_list": src_ipv6},
+                    # Destination
                     {"data.connections[0].terminals[1].uri": dst_uri},
                     {"data.connections[0].terminals[1].assign_ip": "true"},
+                    {"data.connections[0].terminals[1].ipv6_prefix_list": dst_ipv6},
                 ]
             }
         ]
     }
+    if alias:
+        intent["alias"] = alias
     # Create new service instance
-    si_uuid = workflow_api.instance_create(json.dumps(intent))
-    # Provision bandwidth
-    workflow_api.instance_operate("provision", sync="true")
-    status = workflow_api.instance_get_status()
-    return si_uuid, status
-
-def reprovision_link(instance_uuid, new_bandwidth):
-    workflow_api = WorkflowCombinedApi()
-    # TODO: add actual edit/reprovisioning of bandwidth
-    status = workflow_api.instance_get_status(si_uuid=instance_uuid)
-    if "error" in status:
-        raise ValueError(status)
-    if "CANCEL" not in status:
-        raise ValueError(f"cannot reprovision an instance in status '{status}'")
-    elif "READY" not in status:
-        workflow_api.instance_operate(
-            "reprovision", 
-            si_uuid=instance_uuid, 
-            sync="true", 
-            force="true"
-        )
-    else:     
-        workflow_api.instance_operate("reprovision", si_uuid=instance_uuid, sync="true")
-
-    return workflow_api.instance_get_status(si_uuid=instance_uuid)
+    response = workflow_api.instance_create(json.dumps(intent))
+    if len(response) == 0 or "ERROR" in response:
+        raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
+    else:
+        response = json.loads(response)
+        # Provision bandwidth
+        workflow_api.instance_operate("provision", sync="true")
+        return response["service_uuid"]
 
 def delete_link(instance_uuid):
+    """Delete a SENSE link"""
     workflow_api = WorkflowCombinedApi()
     status = workflow_api.instance_get_status(si_uuid=instance_uuid)
     if "error" in status:
@@ -136,6 +141,33 @@ def delete_link(instance_uuid):
     if "CANCEL - READY" in status:
         workflow_api.instance_delete(si_uuid=instance_uuid)
     else:
-        print(f"cancel operation disrupted - instance not deleted - contact admin")
+        raise Exception(f"cancel operation disrupted; instance not deleted")
 
-    return workflow_api.instance_get_status(si_uuid=instance_uuid)
+def reprovision_link(old_instance_uuid, new_bandwidth):
+    """Reprovision a SENSE link
+
+    Note: this currently deletes the existing link, then creates a copy of the old link
+          with the new bandwidth provision; this is NOT how it will ultimately be done 
+          in production, but an actual reprovisioning is not currently supported
+    """
+    # Extract necessary information from old link
+    profile_api = ProfileApi()
+    response = profile_api.profile_describe(old_instance_uuid)
+    if len(response) == 0 or "ERROR" in response:
+        raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
+    else:
+        old_profile = json.loads(response) # FIXME: probably wrong
+        src_info, dst_info = old_profile["data"]["connection"][0]
+        src_uri = src_info["uri"]
+        src_ipv6 = src_info["ipv6_prefix_list"]
+        dst_uri = dst_info["uri"]
+        dst_ipv6 = dst_info["ipv6_prefix_list"]
+        # Delete old link
+        delete_link(instance_uuid)
+        # Create new link with new bandwidth
+        new_instance_uuid = create_link(
+            src_uri, dst_uri, 
+            src_ipv6, dst_ipv6, 
+            new_bandwidth
+        )
+        return new_instance_uuid
