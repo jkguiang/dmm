@@ -87,7 +87,7 @@ class Link:
         else:
             self.src_ipv6 = self.src_site.reserve_ipv6()
             self.dst_ipv6 = self.dst_site.reserve_ipv6()
-            self.sense_link_id, status = sense_api.build_link(
+            self.sense_link_id, status = sense_api.create_link(
                 self.src_site.sense_name,
                 self.dst_site.sense_name,
                 self.src_ipv6,
