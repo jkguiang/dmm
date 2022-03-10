@@ -16,6 +16,7 @@ class Site:
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
         self.prio_sums = {}
         self.all_prios_sum = 0
+        # TODO: read list of ipv6s (with map to ipv6 block) from a config yaml
 
     def add_request(self, partner_name, priority):
         self.all_prios_sum += priority
@@ -34,7 +35,7 @@ class Site:
         uplink_fraction = self.prio_sums.get(partner_name, 0)/self.all_prios_sum
         return self.total_uplink_capacity*uplink_fraction
 
-    def update(self):
+    def update_uplink_capacity(self):
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
 
     def reserve_ipv6(self):
@@ -54,31 +55,42 @@ class Link:
         self.is_open = False
         self.src_ipv6 = ""
         self.dst_ipv6 = ""
-        self.sense_link_id = "" # SENSE service instance UUID
         self.bandwidth = bandwidth
         self.logs = [(time.time(), bandwidth, None, "init")]
-
-    def get_theoretical_bandwidth(self):
-        return sense_api.get_theoretical_bandwidth(
+        self.sense_link_id, self.theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
             self.src_site.sense_name,
             self.dst_site.sense_name
+        )
+
+    def update_theoretical_bandwidth(self):
+        _, self.theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
+            self.src_site.sense_name,
+            self.dst_site.sense_name,
+            instance_uuid=self.sense_link_id
         )
 
     def get_max_bandwidth(self):
         return min(
             self.src_site.get_uplink_provision(self.dst_site.rse_name),
             self.dst_site.get_uplink_provision(self.src_site.rse_name),
-            self.get_theoretical_bandwidth()
+            self.theoretical_bandwidth
         )
 
-    def update(self, new_bandwidth, msg):
+    def reprovision(self, new_bandwidth, msg):
         if new_bandwidth != self.bandwidth:
             # Update logs
             actual_bandwidth = -1 # FIXME: add this
             self.logs.append((time.time(), new_bandwidth, actual_bandwidth, msg))
             self.bandwidth = new_bandwidth
             # Update SENSE link
-            sense_api.reprovision_link(self.sense_link_id, new_bandwidth)
+            self.sense_link_id = sense_api.reprovision_link(
+                self.sense_link_id, 
+                self.src_site.sense_name,
+                self.dst_site.sense_name,
+                self.src_ipv6,
+                self.dst_ipv6,
+                new_bandwidth
+            )
 
     def open(self):
         if self.best_effort:
@@ -87,12 +99,13 @@ class Link:
         else:
             self.src_ipv6 = self.src_site.reserve_ipv6()
             self.dst_ipv6 = self.dst_site.reserve_ipv6()
-            self.sense_link_id, status = sense_api.create_link(
+            sense_api.create_link(
                 self.src_site.sense_name,
                 self.dst_site.sense_name,
                 self.src_ipv6,
                 self.dst_ipv6,
-                self.bandwidth
+                self.bandwidth,
+                instance_uuid=self.sense_link_id
             )
         self.is_open = True
 
@@ -203,13 +216,13 @@ class DMM:
         # Update bandwidth provisions for all other links
         for request, link in self.requests.values():
             new_bandwidth = link.get_max_bandwidth()*request.get_bandwidth_fraction()
-            link.update(new_bandwidth, msg=msg)
+            link.reprovision(new_bandwidth, msg=msg)
 
     def open_request(self, new_request, new_link):
         new_request.register()
         new_link.bandwidth = new_link.get_max_bandwidth()*new_request.get_bandwidth_fraction()
         new_link.open()
-        self.update_requests()
+        self.pdate_requests()
         # Store new request and its corresponding link
         self.requests[new_request.request_id] = (new_request, new_link)
 

@@ -5,6 +5,9 @@ from sense.client.discover_api import DiscoverApi
 
 PROFILE_UUID = "ddd1dec0-83ab-4d08-bca6-9a83334cd6db"
 
+def good_response(response):
+    return len(response) == 0 or "ERROR" in response or "error" in response
+
 def get_ipv6_pool(uri):
     """Return a list of IPv6 subnets at given site
 
@@ -19,20 +22,23 @@ def get_ipv6_pool(uri):
         return response["routing"][0]["ipv6_subnet_pool"].split(",")
 
 def get_uplink_capacity(uri):
-    """Return the maximum uplink capacity in Mb/s for a given site"""
+    """Return the maximum uplink capacity in Mb/s for a given site
+
+    Notes: not fully supported by SENSE yet
+    """
     discover_api = DiscoverApi()
     response = discover_api.discover_domain_id_peers_get(uri)
-    if len(response) == 0 or "ERROR" in response:
+    if not good_response(response):
         raise ValueError(f"Discover query failed for {uri}")
     else:
         response = json.loads(response)
         return float(response["peer_points"][0]["port_capacity"])
 
-def get_uri(rse_name, full=False):
+def get_uri(rse_name, full=True):
     """Return the root SENSE URI for a given Rucio RSE"""
     discover_api = DiscoverApi()
     response = discover_api.discover_lookup_name_get(rse_name)
-    if len(response) == 0 or "ERROR" in response:
+    if not good_response(response):
         raise ValueError(f"Discover query failed for {rse_name}")
     else:
         response = json.loads(response)
@@ -46,12 +52,12 @@ def __get_rooturi(full_uri):
     """Return the root SENSE URI for a given full SENSE URI"""
     discover_api = DiscoverApi()
     uri = discover_api.discover_lookup_rooturi_get(full_uri)
-    if len(uri) == 0 or "ERROR" in uri:
+    if not good_response(uri):
         raise ValueError(f"Discover query failed for {full_uri}")
     else:
         return uri
 
-def get_theoretical_bandwidth(src_uri, dst_uri):
+def get_theoretical_bandwidth(src_uri, dst_uri, instance_uuid=PROFILE_UUID):
     """Return the maximum theoretical bandwidth available between two sites
 
     Note: not fully supported by SENSE yet
@@ -60,7 +66,7 @@ def get_theoretical_bandwidth(src_uri, dst_uri):
     workflow_api.instance_new()
     # Create service instance
     intent = {
-        "service_profile_uuid": PROFILE_UUID,
+        "service_profile_uuid": instance_uuid,
         "queries": [
             {
                 "ask": "edit", 
@@ -77,21 +83,24 @@ def get_theoretical_bandwidth(src_uri, dst_uri):
     }
     # Query SENSE and extract theoretical bandwidth from its response
     response = workflow_api.instance_create(json.dumps(intent))
-    if len(response) == 0 or "ERROR" in response:
+    print(instance_uuid)
+    print(response)
+    if not good_response(response):
         raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
     else:
         response = json.loads(response)
         for query in response["queries"]:
             if query["asked"] == "maximum-bandwidth":
-                return int(query["results"][0]["bandwidth"])
+                return response["service_uuid"], int(query["results"][0]["bandwidth"])
 
-def create_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, alias=""):
+def create_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, 
+                instance_uuid=PROFILE_UUID, alias=""):
     """Create a SENSE guaranteed-bandwidth link between two sites"""
     workflow_api = WorkflowCombinedApi()
     workflow_api.instance_new()
     # Create service instance
     intent = {
-        "service_profile_uuid": PROFILE_UUID,
+        "service_profile_uuid": instance_uuid,
         "queries": [
             {
                 "ask": "edit", 
@@ -115,13 +124,12 @@ def create_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, alias=""):
         intent["alias"] = alias
     # Create new service instance
     response = workflow_api.instance_create(json.dumps(intent))
-    if len(response) == 0 or "ERROR" in response:
+    if not good_response(response):
         raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
     else:
         response = json.loads(response)
         # Provision bandwidth
         workflow_api.instance_operate("provision", sync="true")
-        return response["service_uuid"]
 
 def delete_link(instance_uuid):
     """Delete a SENSE link"""
@@ -143,7 +151,8 @@ def delete_link(instance_uuid):
     else:
         raise Exception(f"cancel operation disrupted; instance not deleted")
 
-def reprovision_link(old_instance_uuid, new_bandwidth):
+def reprovision_link(old_instance_uuid, src_uri, dst_uri, src_ipv6, dst_ipv6, 
+                     new_bandwidth, alias=""):
     """Reprovision a SENSE link
 
     Note: this currently deletes the existing link, then creates a copy of the old link
@@ -153,21 +162,16 @@ def reprovision_link(old_instance_uuid, new_bandwidth):
     # Extract necessary information from old link
     profile_api = ProfileApi()
     response = profile_api.profile_describe(old_instance_uuid)
-    if len(response) == 0 or "ERROR" in response:
+    if not good_response(response):
         raise ValueError(f"SENSE query failed for {PROFILE_UUID}")
     else:
-        old_profile = json.loads(response) # FIXME: probably wrong
-        src_info, dst_info = old_profile["data"]["connection"][0]
-        src_uri = src_info["uri"]
-        src_ipv6 = src_info["ipv6_prefix_list"]
-        dst_uri = dst_info["uri"]
-        dst_ipv6 = dst_info["ipv6_prefix_list"]
         # Delete old link
-        delete_link(instance_uuid)
+        delete_link(old_instance_uuid)
         # Create new link with new bandwidth
         new_instance_uuid = create_link(
             src_uri, dst_uri, 
             src_ipv6, dst_ipv6, 
-            new_bandwidth
+            new_bandwidth,
+            alias=""
         )
         return new_instance_uuid
