@@ -1,0 +1,52 @@
+prometheus:
+  host: blah
+  port: 9090
+sites:
+  XRD1:
+    ipv6_pool:
+      - ipv6: 127.0.0.1
+        block: fc00::0010/124
+      - ipv6: 127.0.0.1
+        block: fc00::0020/124
+      - ipv6: 127.0.0.1
+        block: fc00::0030/124
+      - ipv6: 127.0.0.1
+        block: fc00::0040/124
+      - ipv6: 127.0.0.1
+        block: fc00::0050/124
+  XRD2:
+    ipv6_pool:
+      - ipv6: 127.0.0.1
+        block: fc00::0010/124
+      - ipv6: 127.0.0.1
+        block: fc00::0020/124
+      - ipv6: 127.0.0.1
+        block: fc00::0030/124
+      - ipv6: 127.0.0.1
+        block: fc00::0040/124
+      - ipv6: 127.0.0.1
+        block: fc00::0050/124
+  XRD3:
+    ipv6_pool:
+      - ipv6: 127.0.0.1
+        block: fc00::0010/124
+      - ipv6: 127.0.0.1
+        block: fc00::0020/124
+      - ipv6: 127.0.0.1
+        block: fc00::0030/124
+      - ipv6: 127.0.0.1
+        block: fc00::0040/124
+      - ipv6: 127.0.0.1
+        block: fc00::0050/124
+  XRD4:
+    ipv6_pool:
+      - ipv6: 127.0.0.1
+        block: fc00::0010/124
+      - ipv6: 127.0.0.1
+        block: fc00::0020/124
+      - ipv6: 127.0.0.1
+        block: fc00::0030/124
+      - ipv6: 127.0.0.1
+        block: fc00::0040/124
+      - ipv6: 127.0.0.1
+        block: fc00::0050/124
