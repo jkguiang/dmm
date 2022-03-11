@@ -1,10 +1,11 @@
-import nonsense_api as sense_api
 import argparse
 import time
 import sys
+import yaml
 import signal
 import logging
 from multiprocessing.connection import Listener
+import nonsense_api as sense_api
 
 class Site:
     def __init__(self, rse_name):
@@ -16,8 +17,13 @@ class Site:
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
         self.prio_sums = {}
         self.all_prios_sum = 0
-        # TODO: read list of ipv6s (with map to ipv6 block) from a config yaml
-
+        # Note: the mapping below is a temporary hack; should not be needed in the future
+        self.block_to_ipv6 = {}
+        with open("config.yaml", "r") as f_in:
+            config = yaml.safe_load(f_in)
+            for ipv6_info in config["sites"][rse_name]["ipv6_pool"]:
+                self.block_to_ipv6[ipv6_info["block"]] = ipv6_info["ipv6"]
+                
     def add_request(self, partner_name, priority):
         self.all_prios_sum += priority
         if partner_name in self.prio_sums.keys():
@@ -26,10 +32,10 @@ class Site:
             self.prio_sums[partner_name] = priority
 
     def remove_request(self, partner_name, priority):
-        if partner_name in self.prio_sums.keys():
-            self.prio_sums[partner_name] -= priority
-            if self.prio_sums[partner_name] == 0:
-                self.prio_sums.pop(partner_name)
+        self.all_prios_sum -= priority
+        self.prio_sums[partner_name] -= priority
+        if self.prio_sums[partner_name] == 0:
+            self.prio_sums.pop(partner_name)
 
     def get_uplink_provision(self, partner_name):
         uplink_fraction = self.prio_sums.get(partner_name, 0)/self.all_prios_sum
@@ -56,11 +62,15 @@ class Link:
         self.src_ipv6 = ""
         self.dst_ipv6 = ""
         self.bandwidth = bandwidth
-        self.logs = [(time.time(), bandwidth, None, "init")]
+        self.history = [(time.time(), bandwidth, 0, "init")]
         self.sense_link_id, self.theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
             self.src_site.sense_name,
             self.dst_site.sense_name
         )
+
+    def update_history(self, msg):
+        actual_bandwidth = 0 # FIXME: add this
+        self.history.append((time.time(), self.bandwidth, actual_bandwidth, msg))
 
     def update_theoretical_bandwidth(self):
         _, self.theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
@@ -76,11 +86,19 @@ class Link:
             self.theoretical_bandwidth
         )
 
+    def get_summary(self, string=False):
+        times, promised_bw, actual_bw, _ = zip(*self.history)
+        dts = [t - times[t_i] for t_i, t in enumerate(times[1:])]
+        time_total = sum(dts)
+        avg_promise = sum([bw*dt for bw, dt in zip(promised_bw, dts)])/time_total
+        avg_actual = sum([bw*dt for bw, dt in zip(actual_bw, dts)])/time_total
+        if string:
+            return f"{avg_promise}, {avg_actual} (promised, actual bandwidth [Mb/s])"
+        else:
+            return avg_promise, avg_actual
+
     def reprovision(self, new_bandwidth, msg):
         if new_bandwidth != self.bandwidth:
-            # Update logs
-            actual_bandwidth = -1 # FIXME: add this
-            self.logs.append((time.time(), new_bandwidth, actual_bandwidth, msg))
             self.bandwidth = new_bandwidth
             # Update SENSE link
             self.sense_link_id = sense_api.reprovision_link(
@@ -91,6 +109,7 @@ class Link:
                 self.dst_ipv6,
                 new_bandwidth
             )
+            self.update_history(msg)
 
     def open(self):
         if self.best_effort:
@@ -108,16 +127,18 @@ class Link:
                 instance_uuid=self.sense_link_id
             )
         self.is_open = True
+        self.update_history("opened link")
 
     def close(self):
         if not self.best_effort:
+            sense_api.delete_link(self.sense_link_id)
             self.src_site.free_ipv6(self.src_ipv6)
             self.dst_site.free_ipv6(self.dst_ipv6)
-            sense_api.delete_link(self.sense_link_id)
         self.sense_link_id = ""
         self.src_ipv6 = ""
         self.dst_ipv6 = ""
         self.is_open = False
+        self.update_history("closed link")
 
 class Request:
     def __init__(self, request_id, rule_id, src_site, dst_site, transfer_ids, priority, 
@@ -213,26 +234,43 @@ class DMM:
                     self.finisher_handler(payload)
 
     def update_requests(self, msg):
-        # Update bandwidth provisions for all other links
+        # Update bandwidth provisions for all links
         for request, link in self.requests.values():
             new_bandwidth = link.get_max_bandwidth()*request.get_bandwidth_fraction()
-            link.reprovision(new_bandwidth, msg=msg)
-
-    def open_request(self, new_request, new_link):
-        new_request.register()
-        new_link.bandwidth = new_link.get_max_bandwidth()*new_request.get_bandwidth_fraction()
-        new_link.open()
-        self.pdate_requests()
-        # Store new request and its corresponding link
-        self.requests[new_request.request_id] = (new_request, new_link)
+            if link.is_open:
+                link.reprovision(new_bandwidth, msg=msg)
+            else:
+                link.bandwidth = new_bandwidth
+                link.open()
 
     def preparer_handler(self, payload):
+        """
+        Organize data (the 'payload') from Rucio preparer daemon into Request objects,
+        where each Request == (Rucio Rule ID + RSE Pair), open new links, and 
+        reprovision existing links appropriately
+        
+        payload = {
+            rule_id_1: {
+                "SiteA&SiteB": {
+                    "transfer_ids": [str, str, ...],
+                    "priority": int,
+                    "n_bytes_total": int,
+                    "n_transfers_total": int
+                },
+                "SiteB&SiteC": { ... },
+                ...
+            },
+            rule_id_2: { ... },
+            ...
+        }
+        """
         for rule_id, prepared_rule in payload.items():
             for rse_pair_id, request_attr in prepared_rule.items():
                 src_rse_name, dst_rse_name = rse_pair_id.split("&")
                 # Check if request has already been processed
                 request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
                 if request_id in self.requests.keys():
+                    logging.error("request ID already processed--should never happen!")
                     continue
                 # Retrieve or construct source Site object
                 src_site = self.sites.get(src_rse_name, Site(src_rse_name))
@@ -247,13 +285,22 @@ class DMM:
                 req.register()
                 # Create new Link
                 link = Link(src_site, dst_site, best_effort=(req.priority == 0))
-                link.bandwidth = link.get_max_bandwidth()*req.get_bandwidth_fraction()
-                link.open()
-                self.update_requests(msg="accomodating for new request")
                 # Store new request and its corresponding link
                 self.requests[req.request_id] = (req, link)
 
+        self.update_requests(msg="accommodating for new requests")
+
     def submitter_handler(self, payload):
+        """
+        Return the IPv6 pair (source and dest) for a the request being submitted by the 
+        Rucio submitter daemon
+        
+        payload = {
+            "rule_id": str,
+            "rse_pair_id": str, # e.g. "SiteA&SiteB",
+            "n_transfers_submitted": int
+        }
+        """
         # Unpack payload
         rule_id = payload.get("rule_id")
         src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
@@ -264,12 +311,32 @@ class DMM:
         request.n_transfers_submitted += n_transfers_submitted
         # Get SENSE link endpoints
         sense_map = {
-            request.src_site.rse_name: link.src_ipv6,
-            request.dst_site.rse_name: link.dst_ipv6
+            # block_to_ipv6 translation is a hack; should not be needed in the future
+            request.src_site.rse_name: link.src_site.block_to_ipv6[link.src_ipv6],
+            request.dst_site.rse_name: link.dst_site.block_to_ipv6[link.dst_ipv6]
         }
         return sense_map
 
     def finisher_handler(self, payload):
+        """
+        Parse data (the 'payload') from Rucio finisher daemon, update progress of 
+        every request, close the links for any that have finished, and reprovision 
+        existing links if possible
+        
+        payload = {
+            rule_id_1: {
+                "SiteA&SiteB": {
+                    "n_transfers_finished": int,
+                    "n_bytes_transferred": int
+                },
+                "SiteB&SiteC": { ... },
+                ...
+            },
+            rule_id_2: { ... },
+            ...
+        }
+        """
+        n_links_closed = 0
         for rule_id, finisher_reports in payload.items():
             for rse_pair_id, finisher_report in finisher_reports.items():
                 # Get request ID
@@ -280,11 +347,17 @@ class DMM:
                 request.n_transfers_finished += finisher_report["n_transfers_finished"]
                 request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
                 if request.n_transfers_finished == request.n_transfers_total:
+                    # Close the link and deregister the request
                     link.close()
                     request.deregister()
-                    self.requests.pop(request.request_id)
+                    n_links_closed += 1
+                    # Log the promised and actual bandwidths
+                    logging.debug(f"({request_id} FINISHED) {link.get_summary(string=True)}")
+                    # Clean up
+                    self.requests.pop(request_id)
 
-        self.update_requests(msg="adjusting for request deletion")
+        if n_links_closed > 0:
+            self.update_requests(msg="adjusting for request deletion")
 
 def sigint_handler(dmm):
     def actual_handler(sig, frame):
