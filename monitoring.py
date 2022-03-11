@@ -1,10 +1,9 @@
 # for a prometheus instance running on P_HOST, get network metrics via http api and perform required ops
-from os import environ as env
 import yaml
 import requests
 import time
 
-class MonitoringSession(object):
+class MonitoringSession:
     def __init__(self) -> None:
         with open("config.yaml", "r") as f_in:
             config = yaml.safe_load(f_in)
