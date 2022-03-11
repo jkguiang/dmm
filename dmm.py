@@ -6,6 +6,7 @@ import signal
 import logging
 from multiprocessing.connection import Listener
 import nonsense_api as sense_api
+import monitoring
 
 class Site:
     def __init__(self, rse_name):
@@ -67,10 +68,18 @@ class Link:
             self.src_site.sense_name,
             self.dst_site.sense_name
         )
+        self.prometheus = monitoring.PrometheusSession()
 
     def update_history(self, msg):
-        actual_bandwidth = 0 # FIXME: add this
-        self.history.append((time.time(), self.bandwidth, actual_bandwidth, msg))
+        time_last, _, _, _ = self.history[-1]
+        time_now = time.time()
+        actual_bandwidth = self.prometheus.get_average_throughput(
+            self.src_ipv6,
+            self.src_site.rse_name,
+            time_last,
+            time_now
+        )
+        self.history.append((time_now, self.bandwidth, actual_bandwidth, msg))
 
     def update_theoretical_bandwidth(self):
         _, self.theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
@@ -89,9 +98,13 @@ class Link:
     def get_summary(self, string=False):
         times, promised_bw, actual_bw, _ = zip(*self.history)
         dts = [t - times[t_i] for t_i, t in enumerate(times[1:])]
-        time_total = sum(dts)
-        avg_promise = sum([bw*dt for bw, dt in zip(promised_bw, dts)])/time_total
-        avg_actual = sum([bw*dt for bw, dt in zip(actual_bw, dts)])/time_total
+        avg_promise = sum([bw*dt for bw, dt in zip(promised_bw, dts)])/sum(dts)
+        avg_actual = self.prometheus.get_average_throughput(
+            self.src_ipv6,
+            self.src_site.rse_name,
+            times[1], # times[1] is when the link is actually provisioned
+            times[-1]
+        )
         if string:
             return f"{avg_promise}, {avg_actual} (promised, actual bandwidth [Mb/s])"
         else:
@@ -100,7 +113,7 @@ class Link:
     def reprovision(self, new_bandwidth, msg):
         if new_bandwidth != self.bandwidth:
             self.bandwidth = new_bandwidth
-            # Update SENSE link
+            # Update SENSE link; note: in the future, this should not change the link ID
             self.sense_link_id = sense_api.reprovision_link(
                 self.sense_link_id, 
                 self.src_site.sense_name,
