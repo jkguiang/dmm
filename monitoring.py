@@ -1,9 +1,12 @@
-# for a prometheus instance running on P_HOST, get network metrics via http api and perform required ops
 import yaml
 import requests
 import time
 
-class MonitoringSession:
+class PrometheusSession:
+    """
+    Get network metrics from Prometheus via its HTTP API and return aggregations of 
+    those metrics
+    """
     def __init__(self) -> None:
         with open("config.yaml", "r") as f_in:
             config = yaml.safe_load(f_in)
@@ -13,46 +16,51 @@ class MonitoringSession:
         self.session = requests.Session()
         
         self.dev_map = dict()
-        self.get_dev_map() 
+        self.update_dev_map() 
+
+    def submit_query(self, query_dict, endpoint="api/v1/query") -> dict:
+        query_addr = f"{self.prometheus_addr}/{endpoint}"
+        return self.session.get(query_addr, params=query_dict).json()
         
-    def get_dev_map(self) -> None:
-        query = {"query": "node_network_address_info"}
-        response = self.session.get(self.prometheus_addr + "/api/v1/query", params=query).json()
+    def update_dev_map(self) -> None:
+        """Update IPv6 --> Device Name mapping"""
+        response = self.submit_query({"query": "node_network_address_info"})
         if response["status"] == "success":
             for metric in response["data"]["result"]:
                 self.dev_map[metric["metric"]["address"]] = metric["metric"]["device"]
-    
-    @staticmethod
-    def query_builder(metric, time) -> str:
-        query_dict = dict()
-        query_dict["query"] = metric
-        query_dict["time"] = time 
-        return query_dict
 
     @staticmethod 
     def get_val_from_response(response):
+        """Extract desired value from typical location in Prometheus response"""
         return response["data"]["result"][0]["value"][1]
 
-    # takes IPv6 of source and transfer_start_time as input and returns the total number of bytes transferred
-    def get_total_data_transferred(self, source_ipv6, site_name, start_time, end_time=time.time()) -> float:
-        if self.dev_map[source_ipv6] is None:
-            self.get_dev_map()
-        if self.dev_map[source_ipv6] is None:
-            raise Exception("IPv6 DNE")
-        at_start, at_end = 0, 0
-        start_query = self.query_builder(
-            metric="node_network_transmit_bytes_total{device=\"%s\",job=\"%s\"}" % (self.dev_map[source_ipv6], site_name),
-            time=start_time)
-        start_response = self.session.get(self.prometheus_addr + "/api/v1/query", params=start_query).json()
+    def get_total_bytes_transmitted(self, ipv6, rse_name, start_time, end_time) -> float:
+        """
+        Returns the total number of bytes transmitted from a given Rucio RSE via a given
+        ipv6 address
+        """
+        if self.dev_map[ipv6] is None:
+            self.update_dev_map()
+        if self.dev_map[ipv6] is None:
+            raise Exception("IPv6 does not exist")
+        params = f"device=\"{self.dev_map[ipv6]}\",job=\"^{rse_name}\""
+        metric = f"node_network_transmit_bytes_total{{{params}}}"
+        # Get bytes transferred at the start time
+        start_response = self.submit_query({"query": metric, "time": start_time})
         if start_response["status"] == "success":
-            at_start = self.get_val_from_response(start_response)
-        end_query = self.query_builder(
-            metric="node_network_transmit_bytes_total{device=\"%s\",job=\"%s\"}" % (self.dev_map[source_ipv6], site_name),
-            time=end_time)
-        end_response = self.session.get(self.prometheus_addr + "/api/v1/query", params=end_query).json()
+            bytes_transferred_at_start = self.get_val_from_response(start_response)
+        else:
+            raise Exception(f"query {metric} failed")
+        # Get bytes transferred at the end time
+        end_response = self.submit_query({"query": metric, "time": end_time})
         if end_response["status"] == "success":
-            at_end = self.get_val_from_response(end_response) 
-        return (float(at_end) - float(at_start))
+            bytes_transferred_at_end = self.get_val_from_response(end_response) 
+        else:
+            raise Exception(f"query {metric} failed")
 
-    def get_average_throughput(self, **kwargs) -> float:
-        return self.get_total_data_transferred(**kwargs) / (kwargs["end_time"] - kwargs["start_time"])  
+        return (float(bytes_transferred_at_end) - float(bytes_transferred_at_start))
+
+    def get_average_throughput(self, ipv6, rse_name, start_time, end_time) -> float:
+        """Returns the total throughput from a given Rucio RSE via a given ipv6 address"""
+        total_bytes = self.get_total_bytes_transmitted(ipv6, rse_name, start_time, end_time)
+        return total_bytes/(end_time - start_time)
