@@ -4,6 +4,7 @@ import sys
 import yaml
 import signal
 import logging
+from multiprocessing import Pool, Process
 from multiprocessing.connection import Listener
 import nonsense_api as sense_api
 import monitoring
@@ -14,31 +15,58 @@ class Site:
         self.sense_name = sense_api.get_uri(rse_name)
         self.free_ipv6_pool = sense_api.get_ipv6_pool(self.sense_name)
         self.used_ipv6_pool = []
-        self.default_ipv6 = self.free_ipv6_pool.pop(0) # reserve an ipv6 for best effort service
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
         self.prio_sums = {}
         self.all_prios_sum = 0
-        # Note: the mapping below is a temporary hack; should not be needed in the future
+        # Read site information from config.yaml; should not be needed in the future
         self.block_to_ipv6 = {}
         with open("config.yaml", "r") as f_in:
-            config = yaml.safe_load(f_in)
-            for ipv6_info in config["sites"][rse_name]["ipv6_pool"]:
+            site_config = yaml.safe_load(f_in).get("sites").get(rse_name)
+            # Best effort IPv6 may be extracted from elsewhere in the future
+            self.default_ipv6 = site_config.get("best_effort_ipv6")
+            # The mapping below is a temporary hack; should not be needed in the future
+            for ipv6_info in site_config.get("ipv6_pool", []):
                 self.block_to_ipv6[ipv6_info["block"]] = ipv6_info["ipv6"]
+            # Remove best-effort IPv6 block from the free pool
+            for block, ipv6 in self.block_to_ipv6.items():
+                if ipv6 == self.default_ipv6:
+                    self.free_ipv6_pool.remove(block)
+                    break
                 
     def add_request(self, partner_name, priority):
+        """
+        Add request priority to the numerator and denominator of the uplink provisioning 
+        fraction for this partner
+        """
+        # Add priority to uplink fraction denominator
         self.all_prios_sum += priority
+        # Add priority to uplink fraction numerator
         if partner_name in self.prio_sums.keys():
             self.prio_sums[partner_name] += priority
         else:
             self.prio_sums[partner_name] = priority
 
     def remove_request(self, partner_name, priority):
+        """
+        Subtract request priority to the numerator and denominator of the uplink 
+        provisioning fraction for this partner
+        """
+        # Subtract priority to uplink fraction denominator
         self.all_prios_sum -= priority
+        # Subtract priority to uplink fraction numerator
         self.prio_sums[partner_name] -= priority
         if self.prio_sums[partner_name] == 0:
             self.prio_sums.pop(partner_name)
 
     def get_uplink_provision(self, partner_name):
+        """
+        Return uplink capacity times uplink provisioning fraction for a given partner 
+        site; i.e. the fraction of the capacity provisioned for that partner
+
+                          sum(priorities between this site and a partner site)
+        uplink fraction = ----------------------------------------------------
+                                           sum(all priorities)
+        """
         uplink_fraction = self.prio_sums.get(partner_name, 0)/self.all_prios_sum
         return self.total_uplink_capacity*uplink_fraction
 
@@ -70,15 +98,19 @@ class Link:
         )
         self.prometheus = monitoring.PrometheusSession()
 
-    def update_history(self, msg):
+    def update_history(self, msg, monitoring=False):
         time_last, _, _, _ = self.history[-1]
         time_now = time.time()
-        actual_bandwidth = self.prometheus.get_average_throughput(
-            self.src_ipv6,
-            self.src_site.rse_name,
-            time_last,
-            time_now
-        )
+        if monitoring:
+            actual_bandwidth = self.prometheus.get_average_throughput(
+                self.src_ipv6,
+                self.src_site.rse_name,
+                time_last,
+                time_now
+            )
+        else:
+            actual_bandwidth = -1
+
         self.history.append((time_now, self.bandwidth, actual_bandwidth, msg))
 
     def update_theoretical_bandwidth(self):
@@ -95,24 +127,47 @@ class Link:
             self.theoretical_bandwidth
         )
 
-    def get_summary(self, string=False):
+    def get_summary(self, string=False, monitoring=False):
+        """Return the average promised and actual bandwidth"""
         times, promised_bw, actual_bw, _ = zip(*self.history)
         dts = [t - times[t_i] for t_i, t in enumerate(times[1:])]
         avg_promise = sum([bw*dt for bw, dt in zip(promised_bw, dts)])/sum(dts)
-        avg_actual = self.prometheus.get_average_throughput(
-            self.src_ipv6,
-            self.src_site.rse_name,
-            times[1], # times[1] is when the link is actually provisioned
-            times[-1]
-        )
+        if monitoring:
+            avg_actual = self.prometheus.get_average_throughput(
+                self.src_site.block_to_ipv6[self.src_ipv6], # block_to_ipv6 is a temporary hack
+                self.src_site.rse_name,
+                times[1], # times[1] is when the link is actually provisioned
+                times[-1]
+            )
+        else:
+            avg_actual = -1
         if string:
-            return f"{avg_promise}, {avg_actual} (promised, actual bandwidth [Mb/s])"
+            return f"{avg_promise:0.1f}, {avg_actual:0.1f} (promised, actual bandwidth [Mb/s])"
         else:
             return avg_promise, avg_actual
 
-    def reprovision(self, new_bandwidth, msg):
+    def register(self):
+        if self.best_effort:
+            self.src_ipv6 = self.src_site.default_ipv6
+            self.dst_ipv6 = self.dst_site.default_ipv6
+        else:
+            self.src_ipv6 = self.src_site.reserve_ipv6()
+            self.dst_ipv6 = self.dst_site.reserve_ipv6()
+
+    def deregister(self):
+        if not self.best_effort:
+            self.src_site.free_ipv6(self.src_ipv6)
+            self.dst_site.free_ipv6(self.dst_ipv6)
+        self.sense_link_id = ""
+        self.src_ipv6 = ""
+        self.dst_ipv6 = ""
+
+    def reprovision(self, new_bandwidth):
+        """Reprovision SENSE link
+        
+        Note: this is run asynchronously, so self.bandwidth must be modified externally
+        """
         if new_bandwidth != self.bandwidth:
-            self.bandwidth = new_bandwidth
             # Update SENSE link; note: in the future, this should not change the link ID
             self.sense_link_id = sense_api.reprovision_link(
                 self.sense_link_id, 
@@ -122,36 +177,20 @@ class Link:
                 self.dst_ipv6,
                 new_bandwidth
             )
-            self.update_history(msg)
 
     def open(self):
-        if self.best_effort:
-            self.src_ipv6 = self.src_site.default_ipv6
-            self.dst_ipv6 = self.dst_site.default_ipv6
-        else:
-            self.src_ipv6 = self.src_site.reserve_ipv6()
-            self.dst_ipv6 = self.dst_site.reserve_ipv6()
-            sense_api.create_link(
-                self.src_site.sense_name,
-                self.dst_site.sense_name,
-                self.src_ipv6,
-                self.dst_ipv6,
-                self.bandwidth,
-                instance_uuid=self.sense_link_id
-            )
-        self.is_open = True
-        self.update_history("opened link")
+        sense_api.create_link(
+            self.src_site.sense_name,
+            self.dst_site.sense_name,
+            self.src_ipv6,
+            self.dst_ipv6,
+            self.bandwidth,
+            instance_uuid=self.sense_link_id
+        )
 
     def close(self):
         if not self.best_effort:
             sense_api.delete_link(self.sense_link_id)
-            self.src_site.free_ipv6(self.src_ipv6)
-            self.dst_site.free_ipv6(self.dst_ipv6)
-        self.sense_link_id = ""
-        self.src_ipv6 = ""
-        self.dst_ipv6 = ""
-        self.is_open = False
-        self.update_history("closed link")
 
 class Request:
     def __init__(self, request_id, rule_id, src_site, dst_site, transfer_ids, priority, 
@@ -200,14 +239,19 @@ class Request:
         self.dst_site.remove_request(self.src_site.rse_name, self.priority)
 
 class DMM:
-    def __init__(self, host, port, authkey_file, n_workers=4):
-        self.host = host
-        self.port = port
-        with open(authkey_file, "rb") as f_in:
-            self.authkey = f_in.read()
-        self.n_workers = n_workers
+    def __init__(self, n_workers=4):
+        self.pool = Pool(processes=n_workers)
+        self.pool_jobs = None
         self.sites = {}
         self.requests = {}
+        with open("config.yaml", "r") as f_in:
+            dmm_config = yaml.safe_load(f_in).get("dmm", {})
+            self.host = dmm_config.get("host", "localhost")
+            self.port = dmm_config.get("port", 5000)
+            authkey_file = dmm_config.get("authkey", "")
+            self.monitoring = dmm_config.get("monitoring", True)
+        with open(authkey_file, "rb") as f_in:
+            self.authkey = f_in.read()
 
     def __get_request_id(self, rule_id, src_rse_name, dst_rse_name):
         return f"{rule_id}_{src_rse_name}_{dst_rse_name}"
@@ -221,11 +265,7 @@ class DMM:
             )
 
     def stop(self):
-        """
-        Placeholder; should eventually do the following:
-          - join/close all worker processes
-          - close all SENSE links(?)
-        """
+        self.pool.terminate()
         return
 
     def start(self):
@@ -246,15 +286,43 @@ class DMM:
                 elif daemon.upper() == "FINISHER":
                     self.finisher_handler(payload)
 
+    @staticmethod
+    def link_updater(args):
+        link, new_bandwidth = args
+        if link.is_open:
+            link.reprovision(new_bandwidth)
+        else:
+            link.bandwidth = new_bandwidth
+            link.open()
+
+    @staticmethod
+    def link_closer(link):
+        link.close()
+
     def update_requests(self, msg):
-        # Update bandwidth provisions for all links
+        """Update bandwidth provisions for all links
+
+        Note: Link.reprovision only contacts sense if the new provision is different from 
+              its current bandwidth provision
+        """
+        link_update_jobs = []
         for request, link in self.requests.values():
             new_bandwidth = link.get_max_bandwidth()*request.get_bandwidth_fraction()
+            link_update_jobs.append((link, new_bandwidth))
+        # Submit SENSE queries
+        logging.info("updating link bandwidth provisions")
+        if self.pool_jobs:
+            self.pool_jobs.get()
+        self.pool.map_async(DMM.link_updater, link_update_jobs)
+        # Update link metadata
+        logging.info("updating request metadata")
+        for link, new_bandwidth in link_update_jobs:
+            link.bandwidth = new_bandwidth
             if link.is_open:
-                link.reprovision(new_bandwidth, msg=msg)
+                link.update_history(msg, monitoring=self.monitoring)
             else:
-                link.bandwidth = new_bandwidth
-                link.open()
+                link.update_history("opened link", monitoring=self.monitoring)
+            link.is_open = True
 
     def preparer_handler(self, payload):
         """
@@ -298,10 +366,11 @@ class DMM:
                 req.register()
                 # Create new Link
                 link = Link(src_site, dst_site, best_effort=(req.priority == 0))
+                link.register()
                 # Store new request and its corresponding link
                 self.requests[req.request_id] = (req, link)
 
-        self.update_requests(msg="accommodating for new requests")
+        self.update_requests("accommodating for new requests")
 
     def submitter_handler(self, payload):
         """
@@ -349,7 +418,7 @@ class DMM:
             ...
         }
         """
-        n_links_closed = 0
+        link_close_jobs = {}
         for rule_id, finisher_reports in payload.items():
             for rse_pair_id, finisher_report in finisher_reports.items():
                 # Get request ID
@@ -360,17 +429,25 @@ class DMM:
                 request.n_transfers_finished += finisher_report["n_transfers_finished"]
                 request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
                 if request.n_transfers_finished == request.n_transfers_total:
-                    # Close the link and deregister the request
-                    link.close()
+                    # Stage the link for closure
+                    link_close_jobs[request_id] = link
+                    # Deregister the request
                     request.deregister()
-                    n_links_closed += 1
-                    # Log the promised and actual bandwidths
-                    logging.debug(f"({request_id} FINISHED) {link.get_summary(string=True)}")
                     # Clean up
                     self.requests.pop(request_id)
 
-        if n_links_closed > 0:
-            self.update_requests(msg="adjusting for request deletion")
+        self.pool.map_async(DMM.link_closer, link_close_jobs.values())
+
+        for request_id, link in link_close_jobs.items():
+            link.deregister()
+            link.update_history("closed link", monitoring=self.monitoring)
+            link.is_open = False
+            # Log the promised and actual bandwidths
+            summary = link.get_summary(string=True, monitoring=self.monitoring)
+            logging.debug(f"({request_id} FINISHED) {summary}")
+
+        if len(link_close_jobs) > 0:
+            self.update_requests("adjusting for request deletion")
 
 def sigint_handler(dmm):
     def actual_handler(sig, frame):
@@ -381,18 +458,6 @@ def sigint_handler(dmm):
 
 if __name__ == "__main__":
     cli = argparse.ArgumentParser(description="Rucio-SENSE data movement manager")
-    cli.add_argument(
-        "--host", type=str, default="localhost", 
-        help="hostname for DMM"
-    )
-    cli.add_argument(
-        "--port", type=int, default=5000, 
-        help="port for DMM to listen to"
-    )
-    cli.add_argument(
-        "--authkey", type=str, default="dummykey", 
-        help="path to file with authorization key for DMM listener"
-    )
     cli.add_argument(
         "-n", "--n_workers", type=int, default=4, 
         help="maximum number of worker processes"
@@ -419,6 +484,6 @@ if __name__ == "__main__":
     )
 
     logging.info("Starting DMM")
-    dmm = DMM(args.host, args.port, args.authkey, n_workers=args.n_workers)
+    dmm = DMM(n_workers=args.n_workers)
     signal.signal(signal.SIGINT, sigint_handler(dmm))
     dmm.start()
