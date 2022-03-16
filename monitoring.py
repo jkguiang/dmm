@@ -1,5 +1,6 @@
 import yaml
 import requests
+import logging
 import time
 
 class PrometheusSession:
@@ -9,14 +10,18 @@ class PrometheusSession:
     """
     def __init__(self) -> None:
         with open("config.yaml", "r") as f_in:
-            config = yaml.safe_load(f_in)
-        prometheus_host = config["prometheus"]["host"]
-        prometheus_port = config["prometheus"]["port"]
+            prometheus_config = yaml.safe_load(f_in).get("prometheus")
+            prometheus_host = prometheus_config["host"]
+            prometheus_port = prometheus_config["port"]
         self.prometheus_addr = f"http://{prometheus_host}:{prometheus_port}"
         self.session = requests.Session()
-        
-        self.dev_map = dict()
-        self.update_dev_map() 
+        self.dev_map = {}
+        # Update dev map if prometheus address is reachable
+        try:
+            self.session.head(self.prometheus_addr, stream=True)
+            self.update_dev_map() 
+        except requests.exceptions.ConnectionError as error:
+            logging.warning(f"Prometheus unreachable - {error}")
 
     def submit_query(self, query_dict, endpoint="api/v1/query") -> dict:
         query_addr = f"{self.prometheus_addr}/{endpoint}"
