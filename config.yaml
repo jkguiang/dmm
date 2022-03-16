@@ -1,8 +1,14 @@
+dmm:
+  host: localhost
+  port: 5000
+  authkey: dummykey
+  monitoring: false
 prometheus:
   host: blah
   port: 9090
 sites:
   XRD1:
+    best_effort_ipv6: 127.0.0.1
     ipv6_pool:
       - ipv6: 127.0.0.1
         block: fc00::0010/124
@@ -15,6 +21,7 @@ sites:
       - ipv6: 127.0.0.1
         block: fc00::0050/124
   XRD2:
+    best_effort_ipv6: 127.0.0.1
     ipv6_pool:
       - ipv6: 127.0.0.1
         block: fc00::0010/124
@@ -27,6 +34,7 @@ sites:
       - ipv6: 127.0.0.1
         block: fc00::0050/124
   XRD3:
+    best_effort_ipv6: 127.0.0.1
     ipv6_pool:
       - ipv6: 127.0.0.1
         block: fc00::0010/124
@@ -39,6 +47,7 @@ sites:
       - ipv6: 127.0.0.1
         block: fc00::0050/124
   XRD4:
+    best_effort_ipv6: 127.0.0.1
     ipv6_pool:
       - ipv6: 127.0.0.1
         block: fc00::0010/124
