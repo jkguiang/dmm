@@ -1,9 +1,19 @@
 import json
+import yaml
 from sense.client.workflow_combined_api import WorkflowCombinedApi
 from sense.client.profile_api import ProfileApi
 from sense.client.discover_api import DiscoverApi
 
-PROFILE_UUID = "ddd1dec0-83ab-4d08-bca6-9a83334cd6db"
+PROFILE_UUID = ""
+
+def get_profile_uuid():
+    global PROFILE_UUID
+    if PROFILE_UUID == "":
+        with open("config.yaml", "r") as f_in:
+            sense_config = yaml.safe_load(f_in).get("sense")
+            PROFILE_UUID = sense_config.get("profile_uuid")
+
+    return PROFILE_UUID
 
 def good_response(response):
     return len(response) == 0 or "ERROR" in response or "error" in response
@@ -35,7 +45,7 @@ def get_uplink_capacity(uri):
         return float(response["peer_points"][0]["port_capacity"])
 
 def get_uri(rse_name, full=True):
-    """Return the root SENSE URI for a given Rucio RSE"""
+    """Return the SENSE URI for a given Rucio RSE"""
     discover_api = DiscoverApi()
     response = discover_api.discover_lookup_name_get(rse_name)
     if not good_response(response):

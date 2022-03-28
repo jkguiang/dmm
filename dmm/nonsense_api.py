@@ -3,7 +3,16 @@ import time
 import uuid
 import yaml
 
-PROFILE_UUID = uuid.uuid4()
+PROFILE_UUID = ""
+
+def get_profile_uuid():
+    global PROFILE_UUID
+    if PROFILE_UUID == "":
+        with open("config.yaml", "r") as f_in:
+            sense_config = yaml.safe_load(f_in).get("sense")
+            PROFILE_UUID = sense_config.get("profile_uuid")
+
+    return PROFILE_UUID
 
 def good_response(response):
     return len(response) == 0 or "ERROR" in response or "error" in response
