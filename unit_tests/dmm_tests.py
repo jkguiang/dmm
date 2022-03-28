@@ -64,6 +64,7 @@ class TestDMM(unittest.TestCase):
         with Client(self.address, authkey=self.authkey) as client:
             client.send(("PREPARER", preparer_payload))
         time.sleep(self.wait_time)
+
     def submitter_step(self):
         expected_responses = [
             {"XRD1": "127.0.0.1", "XRD3": "127.0.0.1"},
@@ -77,6 +78,8 @@ class TestDMM(unittest.TestCase):
                 resp = client.recv()
                 self.assertEqual(resp, expected_responses[i])
             time.sleep(self.wait_time)
+        time.sleep(50)
+
     def finisher_step(self):
         with Client(self.address, authkey=self.authkey) as client:
             client.send(("FINISHER", finisher_payload))
@@ -98,10 +101,10 @@ class TestDMM(unittest.TestCase):
             except Exception as e:
                 self.fail("{} failed ({}: {})".format(func_name, type(e), e))
 
-    def test_workflow_2sec(self):
-        self.wait_time = 2
-        for func_name, func in self.__workflow():
-            try:
-                func()
-            except Exception as e:
-                self.fail("{} failed ({}: {})".format(func_name, type(e), e))
+    # def test_workflow_2sec(self):
+    #     self.wait_time = 2
+    #     for func_name, func in self.__workflow():
+    #         try:
+    #             func()
+    #         except Exception as e:
+    #             self.fail("{} failed ({}: {})".format(func_name, type(e), e))
