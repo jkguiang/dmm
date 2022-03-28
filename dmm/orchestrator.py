@@ -49,10 +49,13 @@ class Orchestrator:
             if (now - self.last_logged) >= self.logging_interval:
                 if self.active:
                     logging.debug(f"Active jobs: {', '.join(self.active)}")
+                else:
+                    logging.debug(f"No active orchestrator jobs")
+                if self.queued:
                     queue_lengths = [f"{n}: {len(q)}" for n, q in self.queued.items()]
                     logging.debug(f"Queued jobs: {', '.join(queue_lengths)}")
                 else:
-                    logging.debug(f"No active orchestrator jobs")
+                    logging.debug(f"No queued orchestrator jobs")
                 self.last_logged = now
             self.lock.release()
 
