@@ -3,6 +3,8 @@ dmm:
   port: 5000
   authkey: dummykey
   monitoring: false
+sense:
+  profile_uuid: ddd1dec0-83ab-4d08-bca6-9a83334cd6db
 prometheus:
   host: blah
   port: 9090
