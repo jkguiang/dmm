@@ -49,7 +49,6 @@ class DMM:
                 daemon, payload = connection.recv()
                 if daemon.upper() == "PREPARER":
                     self.preparer_handler(payload)
-                    self.__dump()
                 elif daemon.upper() == "SUBMITTER":
                     result = self.submitter_handler(payload)
                     connection.send(result)
@@ -58,7 +57,7 @@ class DMM:
 
     @staticmethod
     def link_updater(link, new_bandwidth, msg, monitoring):
-        logging.debug(f"hello from a worker thread: {link}, {new_bandwidth}")
+        logging.debug(f"{link} | {link.bandwidth} --> {new_bandwidth}; {msg}")
         if link.is_open:
             link.reprovision(new_bandwidth)
         else:
@@ -68,12 +67,13 @@ class DMM:
         link.update_history(msg, monitoring=monitoring)
 
     @staticmethod
-    def link_closer(link, monitoring):
+    def link_closer(link, request_id, monitoring):
+        logging.debug(f"{link} | closing link")
         link.close()
         link.update_history("closing link", monitoring=monitoring)
         # Log the promised and actual bandwidths
         summary = link.get_summary(string=True, monitoring=monitoring)
-        logging.debug(f"FINISHED: {summary}")
+        logging.info(f"({request_id} FINISHED) {summary}")
 
     def update_links(self, msg):
         """Update bandwidth provisions for all links
@@ -200,7 +200,7 @@ class DMM:
                 if request.n_transfers_finished == request.n_transfers_total:
                     # Stage the link for closure
                     link.deregister()
-                    closer_args = (link, self.monitoring)
+                    closer_args = (link, request_id, self.monitoring)
                     self.orchestrator.put(str(link), DMM.link_closer, closer_args)
                     # Deregister the request
                     request.deregister()
@@ -238,7 +238,7 @@ if __name__ == "__main__":
         handlers.append(logging.StreamHandler(sys.stdout))
 
     logging.basicConfig(
-        format="%(levelname)s [%(asctime)s]: %(message)s",
+        format="(%(threadName)s) [%(asctime)s] %(levelname)s: %(message)s",
         datefmt="%m-%d-%Y %H:%M:%S %p",
         level=getattr(logging, args.loglevel.upper()),
         handlers=handlers
