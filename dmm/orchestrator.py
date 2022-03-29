@@ -13,7 +13,7 @@ class Orchestrator:
         self.lock = Lock()
         self.__stop_event = Event()
         self.last_logged = 0
-        self.logging_interval=logging_interval
+        self.logging_interval = logging_interval
         self.thread.start()
 
     def __start(self):
@@ -62,8 +62,17 @@ class Orchestrator:
     def stop(self):
         self.pool.close()
         self.pool.terminate()
+        self.clear()
         self.__stop_event.set()
         self.thread.join()
+
+    def clear(self, job_name=""):
+        self.lock.acquire()
+        if not job_name:
+            self.queued = {}
+        elif job_name in self.queued.keys():
+            self.queued[job_name] = []
+        self.lock.release()
 
     def put(self, job_name, worker_func, job_args):
         self.lock.acquire()

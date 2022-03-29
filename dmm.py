@@ -201,6 +201,7 @@ class DMM:
                     # Stage the link for closure
                     link.deregister()
                     closer_args = (link, request_id, self.monitoring)
+                    self.orchestrator.clear(str(link))
                     self.orchestrator.put(str(link), DMM.link_closer, closer_args)
                     # Deregister the request
                     request.deregister()
