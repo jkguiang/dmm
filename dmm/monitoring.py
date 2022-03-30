@@ -48,7 +48,7 @@ class PrometheusSession:
             self.update_dev_map()
         if self.dev_map[ipv6] is None:
             raise Exception("IPv6 does not exist")
-        params = f"device=\"{self.dev_map[ipv6]}\",job=\"^{rse_name}\""
+        params = f"device=\"{self.dev_map[ipv6]}\",job=~\"{rse_name}.+\""
         metric = f"node_network_transmit_bytes_total{{{params}}}"
         # Get bytes transferred at the start time
         start_response = self.submit_query({"query": metric, "time": start_time})

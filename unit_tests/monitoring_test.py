@@ -1,20 +1,20 @@
 # Monitoring Unit Tests
-from dmm.monitoring import MonitoringSession
+from dmm.monitoring import PrometheusSession
 import time
 
-m = MonitoringSession()
-host_ip = '172.19.0.1' 
-site_name = 'T2_US_TEST'
+m = PrometheusSession()
+host_ip = '2605:d9c0:2:10::2:17' 
+site_name = 'T2_US_Caltech_DTNs'
 
 try:
-    m.get_total_data_transferred(host_ip, site_name, time.time()-1000)
+    print(m.get_total_bytes_transmitted(host_ip, site_name, time.time()-1000, time.time()))
 except:
     raise Exception("Failed get_total_data_transferred test")
 finally:
     print("Passed total_data_transferred test")
 
 try:
-    m.get_average_throughput(host_ip, site_name, time.time()-1000)
+    print(m.get_average_throughput(host_ip, site_name, time.time()-1000, time.time()))
 except:
     raise Exception("Failed get_average_throughput test")
 finally:
