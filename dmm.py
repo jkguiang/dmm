@@ -234,10 +234,11 @@ if __name__ == "__main__":
     )
     args = cli.parse_args()
 
+    # Set up logging handlers
     handlers = [logging.FileHandler(filename=args.logfile)]
     if args.loglevel.upper() == "DEBUG":
         handlers.append(logging.StreamHandler(sys.stdout))
-
+    # Configure logging
     logging.basicConfig(
         format="(%(threadName)s) [%(asctime)s] %(levelname)s: %(message)s",
         datefmt="%m-%d-%Y %H:%M:%S %p",
@@ -245,7 +246,8 @@ if __name__ == "__main__":
         handlers=handlers
     )
 
-    logging.info("Starting DMM")
+    # Start DMM
     dmm = DMM(n_workers=args.n_workers)
     signal.signal(signal.SIGINT, sigint_handler(dmm))
+    logging.info("Starting DMM")
     dmm.start()
