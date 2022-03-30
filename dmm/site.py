@@ -1,4 +1,5 @@
 import yaml
+import logging
 import dmm.nonsense_api as sense_api
 
 class Site:
@@ -14,6 +15,8 @@ class Site:
         self.block_to_ipv6 = {}
         with open("config.yaml", "r") as f_in:
             site_config = yaml.safe_load(f_in).get("sites").get(rse_name)
+            if not site_config:
+                logging.error(f"no config for {rse_name} in config.yaml!")
             # Best effort IPv6 may be extracted from elsewhere in the future
             self.default_ipv6 = site_config.get("best_effort_ipv6")
             # The mapping below is a temporary hack; should not be needed in the future
