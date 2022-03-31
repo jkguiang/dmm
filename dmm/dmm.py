@@ -53,8 +53,8 @@ class DMM:
                     self.finisher_handler(payload)
 
     @staticmethod
-    def link_updater(link, new_bandwidth, msg, monitoring):
-        logging.debug(f"{link} | {link.bandwidth} --> {new_bandwidth}; {msg}")
+    def link_updater(request_id, link, new_bandwidth, msg, monitoring):
+        logging.debug(f"{request_id} | {link.bandwidth} --> {new_bandwidth}; {msg}")
         if link.is_open:
             link.reprovision(new_bandwidth)
         else:
@@ -64,31 +64,29 @@ class DMM:
         link.update_history(msg, monitoring=monitoring)
 
     @staticmethod
-    def link_closer(link, request_id, monitoring):
-        logging.debug(f"{link} | closing link")
+    def link_closer(request_id, link, monitoring):
+        logging.debug(f"{request_id} | closing link")
         link.close()
         link.update_history("closing link", monitoring=monitoring)
         # Log the promised and actual bandwidths
         summary = link.get_summary(string=True, monitoring=monitoring)
-        logging.info(f"({request_id} FINISHED) {summary}")
+        logging.info(f"{request_id} | {summary}; closed")
 
     def update_links(self, msg):
-        """Update bandwidth provisions for all links
-
-        Note: Link.reprovision only contacts sense if the new provision is different from 
-              its current bandwidth provision
-        """
+        """Update bandwidth provisions for all links"""
         logging.info("updating link bandwidth provisions and metadata")
-        for request, link in self.requests.values():
+        for request_id, (request, link) in self.requests.items():
             new_bandwidth = link.get_max_bandwidth()*request.get_bandwidth_fraction()
-            # Submit SENSE query
-            link_updater_args = (
-                link,
-                new_bandwidth,
-                msg if link.is_open else "opened link",
-                self.monitoring
-            )
-            self.orchestrator.put(str(link), DMM.link_updater, link_updater_args)
+            if not link.is_open or link.bandwidth != new_bandwidth:
+                # Submit SENSE query
+                link_updater_args = (
+                    request_id,
+                    link,
+                    new_bandwidth,
+                    msg if link.is_open else "opened link",
+                    self.monitoring
+                )
+                self.orchestrator.put(request_id, DMM.link_updater, link_updater_args)
 
     def preparer_handler(self, payload):
         """
@@ -144,30 +142,42 @@ class DMM:
         Rucio submitter daemon
         
         payload = {
-            "rule_id": str,
-            "priority": int,
-            "rse_pair_id": str, # e.g. "SiteA&SiteB",
-            "n_transfers_submitted": int
+            rule_id_1: {
+                "SiteA&SiteB": {
+                    "priority": int,
+                    "n_transfers_submitted": int
+                },
+                "SiteB&SiteC": { ... },
+                ...
+            },
+            rule_id_2: { ... },
+            ...
         }
         """
-        # Unpack payload
-        rule_id = payload.get("rule_id")
-        priority = payload.get("priority")
-        src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
-        n_transfers_submitted = payload.get("n_transfers_submitted")
-        # Update request
-        request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
-        request, link = self.requests[request_id]
-        request.n_transfers_submitted += n_transfers_submitted
-        if priority != request.priority:
-            request.priority = priority
+        n_priority_changes = 0
+        sense_map = {}
+        for rule_id, submitter_reports in payload.items():
+            sense_map[rule_id] = {}
+            for rse_pair_id, report in submitter_reports.items():
+                # Get request
+                src_rse_name, dst_rse_name = rse_pair_id.split("&")
+                request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
+                request, link = self.requests[request_id]
+                # Update request
+                request.n_transfers_submitted += report["n_transfers_submitted"]
+                if report["priority"] != request.priority:
+                    request.priority = report["priority"]
+                    n_priority_changes += 1
+                # Get SENSE link endpoints
+                sense_map[rule_id][rse_pair_id] = {
+                    # block_to_ipv6 translation is a hack; should not be needed in the future
+                    request.src_site.rse_name: link.src_site.block_to_ipv6[link.src_ipv6],
+                    request.dst_site.rse_name: link.dst_site.block_to_ipv6[link.dst_ipv6]
+                }
+
+        if n_priority_changes > 0:
             self.update_links("adjusting for priority update")
-        # Get SENSE link endpoints
-        sense_map = {
-            # block_to_ipv6 translation is a hack; should not be needed in the future
-            request.src_site.rse_name: link.src_site.block_to_ipv6[link.src_ipv6],
-            request.dst_site.rse_name: link.dst_site.block_to_ipv6[link.dst_ipv6]
-        }
+
         return sense_map
 
     def finisher_handler(self, payload):
@@ -189,26 +199,27 @@ class DMM:
             ...
         }
         """
-        link_close_jobs = {}
+        n_link_closures = 0
         for rule_id, finisher_reports in payload.items():
-            for rse_pair_id, finisher_report in finisher_reports.items():
-                # Get request ID
+            for rse_pair_id, report in finisher_reports.items():
+                # Get request
                 src_rse_name, dst_rse_name = rse_pair_id.split("&")
                 request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
-                # Update request
                 request, link = self.requests[request_id]
-                request.n_transfers_finished += finisher_report["n_transfers_finished"]
-                request.n_bytes_transferred += finisher_report["n_bytes_transferred"]
+                # Update request
+                request.n_transfers_finished += report["n_transfers_finished"]
+                request.n_bytes_transferred += report["n_bytes_transferred"]
                 if request.n_transfers_finished == request.n_transfers_total:
                     # Stage the link for closure
                     link.deregister()
-                    closer_args = (link, request_id, self.monitoring)
-                    self.orchestrator.clear(str(link))
-                    self.orchestrator.put(str(link), DMM.link_closer, closer_args)
+                    closer_args = (request_id, link, self.monitoring)
+                    self.orchestrator.clear(request_id)
+                    self.orchestrator.put(request_id, DMM.link_closer, closer_args)
+                    n_link_closures += 1
                     # Deregister the request
                     request.deregister()
                     # Clean up
                     self.requests.pop(request_id)
 
-        if len(link_close_jobs) > 0:
+        if n_link_closures > 0:
             self.update_links("adjusting for request deletion")

@@ -6,10 +6,15 @@ from threading import Thread, Event, Lock
 
 class Orchestrator:
     def __init__(self, n_workers=4, logging_interval=10):
-        self.pool = ThreadPool(processes=n_workers)
+        self.n_workers = n_workers
+        self.pool = ThreadPool(processes=self.n_workers)
+        # Rename worker threads
+        for worker_i, worker in enumerate(self.pool._pool):
+            worker.name = f"WorkThread-{worker_i:02d}"
         self.queued = {}
         self.active = {}
         self.thread = Thread(target=self.__start)
+        self.thread.name = "OrchThread"
         self.lock = Lock()
         self.__stop_event = Event()
         self.last_logged = 0
@@ -17,7 +22,7 @@ class Orchestrator:
         self.thread.start()
 
     def __start(self):
-        logging.debug("Orchestrator started")
+        logging.debug(f"Orchestrator started with {self.n_workers} workers")
         while not self.__stop_event.is_set():
             finished_jobs = []
             # Check for job completion
