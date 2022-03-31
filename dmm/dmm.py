@@ -145,18 +145,23 @@ class DMM:
         
         payload = {
             "rule_id": str,
+            "priority": int,
             "rse_pair_id": str, # e.g. "SiteA&SiteB",
             "n_transfers_submitted": int
         }
         """
         # Unpack payload
         rule_id = payload.get("rule_id")
+        priority = payload.get("priority")
         src_rse_name, dst_rse_name = payload.get("rse_pair_id").split("&")
         n_transfers_submitted = payload.get("n_transfers_submitted")
         # Update request
         request_id = self.__get_request_id(rule_id, src_rse_name, dst_rse_name)
         request, link = self.requests[request_id]
         request.n_transfers_submitted += n_transfers_submitted
+        if priority != request.priority:
+            request.priority = priority
+            self.update_links("adjusting for priority update")
         # Get SENSE link endpoints
         sense_map = {
             # block_to_ipv6 translation is a hack; should not be needed in the future
