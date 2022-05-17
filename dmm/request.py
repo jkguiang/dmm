@@ -1,5 +1,5 @@
 import time
-import dmm.nonsense_api as sense_api
+import dmm.sense_api as sense_api
 from dmm.monitoring import PrometheusSession
 
 class Request:
@@ -28,9 +28,8 @@ class Request:
         self.bandwidth = 0
         self.history = [(time.time(), self.bandwidth, 0, "init")]
         self.prometheus = PrometheusSession()
-        self.sense_link_id = sense_api.get_profile_uuid()
+        self.sense_link_id = ""
         self.theoretical_bandwidth = -1
-        self.update_theoretical_bandwidth()
 
     @staticmethod
     def id(rule_id, src_rse_name, dst_rse_name):
@@ -75,7 +74,13 @@ class Request:
             return avg_promise, avg_actual
 
     def register(self):
-        """Register new request at the source and destination sites"""
+        """Register new request at the source and destination sites
+
+        Note: cannot be run in parallel with another Request.register() because it would 
+              incur a race condition; both instances need to modify a list at their 
+              source/destination sites, so we specifically get a race condition if they 
+              share either of the same endpoints.
+        """
         self.src_site.add_request(self.dst_site.rse_name, self.priority)
         self.dst_site.add_request(self.src_site.rse_name, self.priority)
         if self.best_effort:
@@ -86,7 +91,13 @@ class Request:
             self.dst_ipv6 = self.dst_site.reserve_ipv6()
 
     def deregister(self):
-        """Deregister new request at the source and destination sites"""
+        """Deregister new request at the source and destination sites
+
+        Note: cannot be run in parallel with another Request.deregister() because it would 
+              incur a race condition; both instances need to modify a list at their 
+              source/destination sites, so we specifically get a race condition if they 
+              share either of the same endpoints.
+        """
         self.src_site.remove_request(self.dst_site.rse_name, self.priority)
         self.dst_site.remove_request(self.src_site.rse_name, self.priority)
         if not self.best_effort:
@@ -94,17 +105,6 @@ class Request:
             self.dst_site.free_ipv6(self.dst_ipv6)
         self.src_ipv6 = ""
         self.dst_ipv6 = ""
-
-    def update_theoretical_bandwidth(self):
-        if self.best_effort:
-            return
-        link_id, theoretical_bandwidth = sense_api.get_theoretical_bandwidth(
-            self.src_site.sense_name,
-            self.dst_site.sense_name,
-            instance_uuid=self.sense_link_id
-        )
-        self.sense_link_id = link_id
-        self.theoretical_bandwidth = theoretical_bandwidth
 
     def get_max_bandwidth(self):
         if self.best_effort:
@@ -129,7 +129,10 @@ class Request:
             return self.priority/self.src_site.prio_sums.get(self.dst_site.rse_name)
 
     def reprovision_link(self):
-        """Reprovision SENSE link"""
+        """Reprovision SENSE link
+
+        Note: can be run in parallel, only modifies itself
+        """
         old_bandwidth = self.bandwidth
         new_bandwidth = self.get_max_bandwidth()*self.get_bandwidth_fraction()
         if not self.best_effort and new_bandwidth != old_bandwidth:
@@ -140,27 +143,48 @@ class Request:
                 self.dst_site.sense_name,
                 self.src_ipv6,
                 self.dst_ipv6,
-                new_bandwidth
+                new_bandwidth,
+                alias=self.request_id
             )
             self.bandwidth = new_bandwidth
 
     def open_link(self):
-        """Create SENSE link"""
+        """Create SENSE link
+
+        Note: can be run in parallel, only modifies itself
+        """
         if not self.best_effort:
+            # Initialize SENSE link and get theoretical bandwidth
+            self.sense_link_id, self.theoretical_bandwidth = sense_api.stage_link(
+                self.src_site.sense_name,
+                self.dst_site.sense_name,
+                self.src_ipv6,
+                self.dst_ipv6,
+                alias=self.request_id
+            )
+            # Get bandwidth provisioning
             self.bandwidth = self.get_max_bandwidth()*self.get_bandwidth_fraction()
-            self.sense_link_id = sense_api.create_link(
+            # Provision link
+            sense_api.provision_link(
+                self.sense_link_id, 
                 self.src_site.sense_name,
                 self.dst_site.sense_name,
                 self.src_ipv6,
                 self.dst_ipv6,
                 self.bandwidth,
-                instance_uuid=self.sense_link_id
+                alias=self.request_id
             )
+
         self.link_is_open = True
 
     def close_link(self):
-        """Close SENSE link"""
+        """Close SENSE link
+
+        Note: can be run in parallel, only modifies itself
+        """
         if not self.best_effort:
             sense_api.delete_link(self.sense_link_id)
             self.sense_link_id = ""
+            self.theoretical_bandwidth = -1
+
         self.link_is_open = False

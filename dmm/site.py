@@ -1,6 +1,6 @@
 import yaml
 import logging
-import dmm.nonsense_api as sense_api
+import dmm.sense_api as sense_api
 
 class Site:
     def __init__(self, rse_name):

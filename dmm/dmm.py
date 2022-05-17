@@ -203,8 +203,8 @@ class DMM:
                 request.n_transfers_finished += report["n_transfers_finished"]
                 request.n_bytes_transferred += report["n_bytes_transferred"]
                 if request.n_transfers_finished == request.n_transfers_total:
-                    # Stage the link for closure
                     request.deregister()
+                    # Stage the link for closure
                     closer_args = (request, self.monitoring)
                     self.orchestrator.clear(request_id)
                     self.orchestrator.put(request_id, DMM.link_closer, closer_args)

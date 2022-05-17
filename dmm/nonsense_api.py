@@ -50,7 +50,7 @@ def __get_rooturi(full_uri):
     """Return the root SENSE URI for a given full SENSE URI"""
     return full_uri.split(":")[0]
 
-def get_theoretical_bandwidth(src_uri, dst_uri, instance_uuid=PROFILE_UUID):
+def stage_link(src_uri, dst_uri, src_ipv6, dst_ipv6, instance_uuid="", alias=""):
     """Return the maximum theoretical bandwidth available between two sites
 
     Note: not fully supported by SENSE yet
@@ -58,19 +58,18 @@ def get_theoretical_bandwidth(src_uri, dst_uri, instance_uuid=PROFILE_UUID):
     time.sleep(1)
     return uuid.uuid4(), 100000000000
 
-def create_link(src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, 
-                instance_uuid=PROFILE_UUID, alias=""):
+def provision_link(instance_uuid, src_uri, dst_uri, src_ipv6, dst_ipv6, bandwidth, alias=""):
     """Create a SENSE guaranteed-bandwidth link between two sites"""
-    time.sleep(60)
+    time.sleep(5)
     return
 
 def delete_link(instance_uuid):
     """Delete a SENSE link"""
-    time.sleep(60)
+    time.sleep(5)
     return
 
 def reprovision_link(old_instance_uuid, src_uri, dst_uri, src_ipv6, dst_ipv6, 
                      new_bandwidth, alias=""):
     """Reprovision a SENSE link"""
-    time.sleep(120)
+    time.sleep(10)
     return uuid.uuid4()
