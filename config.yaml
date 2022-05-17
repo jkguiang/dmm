@@ -4,7 +4,7 @@ dmm:
   authkey: dummykey
   monitoring: false
 sense:
-  profile_uuid: ddd1dec0-83ab-4d08-bca6-9a83334cd6db
+  profile_uuid: 573a933f-9a22-40ac-a9bc-69153a185932
 prometheus:
   host: influx.sdn-sense.dev
   port: 9090
