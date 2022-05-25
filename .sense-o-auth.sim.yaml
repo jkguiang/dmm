@@ -1,0 +1,9 @@
+AUTH_ENDPOINT: http://127.0.0.1:8000/auth
+API_ENDPOINT: http://127.0.0.1:8000/api
+CLIENT_ID: NONSENSE
+USERNAME: foo@ucsd.edu
+PASSWORD: password
+SECRET: verysecretsecret
+verify: False
+#for servers with verifiable SSL cert
+#verify: True
