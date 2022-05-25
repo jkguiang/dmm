@@ -6,7 +6,7 @@ class Site:
     def __init__(self, rse_name):
         self.rse_name = rse_name
         self.sense_name = sense_api.get_uri(rse_name)
-        self.free_ipv6_pool = sense_api.get_ipv6_pool(self.sense_name)
+        self.free_ipv6_pool = []
         self.used_ipv6_pool = []
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
         self.prio_sums = {}
@@ -17,16 +17,17 @@ class Site:
             site_config = yaml.safe_load(f_in).get("sites").get(rse_name)
             if not site_config:
                 logging.error(f"no config for {rse_name} in config.yaml!")
-            # Best effort IPv6 may be extracted from elsewhere in the future
-            self.default_ipv6 = site_config.get("best_effort_ipv6")
-            # The mapping below is a temporary hack; should not be needed in the future
-            for ipv6_info in site_config.get("ipv6_pool", []):
-                self.block_to_ipv6[ipv6_info["block"]] = ipv6_info["ipv6"]
-            # Remove best-effort IPv6 block from the free pool
-            for block, ipv6 in self.block_to_ipv6.items():
-                if ipv6 == self.default_ipv6:
-                    self.free_ipv6_pool.remove(block)
-                    break
+
+        # Best effort IPv6 may be extracted from elsewhere in the future
+        self.default_ipv6 = site_config.get("best_effort_ipv6")
+        # The mapping below is a temporary hack; should not be needed in the future
+        self.block_to_ipv6 = site_config.get("ipv6_pool", {})
+
+        # Pull configured ipv6 blocks from free pool
+        all_ipv6_blocks = self.free_ipv6_pool
+        for block in sense_api.get_ipv6_pool(self.sense_name):
+            if block in self.block_to_ipv6 and self.block_to_ipv6[block] != self.default_ipv6:
+                self.free_ipv6_pool.append(block)
                 
     def add_request(self, partner_name, priority):
         """
