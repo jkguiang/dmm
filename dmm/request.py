@@ -1,4 +1,5 @@
 import time
+import math
 import dmm.sense_api as sense_api
 from dmm.monitoring import PrometheusSession
 
@@ -134,7 +135,7 @@ class Request:
         Note: can be run in parallel, only modifies itself
         """
         old_bandwidth = self.bandwidth
-        new_bandwidth = self.get_max_bandwidth()*self.get_bandwidth_fraction()
+        new_bandwidth = math.floor(self.get_max_bandwidth()*self.get_bandwidth_fraction())
         if not self.best_effort and new_bandwidth != old_bandwidth:
             # Update SENSE link; note: in the future, this should not change the link ID
             self.sense_link_id = sense_api.reprovision_link(
@@ -163,7 +164,7 @@ class Request:
                 alias=self.request_id
             )
             # Get bandwidth provisioning
-            self.bandwidth = self.get_max_bandwidth()*self.get_bandwidth_fraction()
+            self.bandwidth = math.floor(self.get_max_bandwidth()*self.get_bandwidth_fraction())
             # Provision link
             sense_api.provision_link(
                 self.sense_link_id, 
