@@ -5,14 +5,13 @@ import dmm.sense_api as sense_api
 class Site:
     def __init__(self, rse_name):
         self.rse_name = rse_name
-        self.sense_name = sense_api.get_uri(rse_name)
+        self.sense_name = sense_api.get_uri(rse_name, regex=f"^{rse_name}$")
         self.free_ipv6_pool = []
         self.used_ipv6_pool = []
         self.total_uplink_capacity = sense_api.get_uplink_capacity(self.sense_name)
         self.prio_sums = {}
         self.all_prios_sum = 0
         # Read site information from config.yaml; should not be needed in the future
-        self.block_to_ipv6 = {}
         with open("config.yaml", "r") as f_in:
             site_config = yaml.safe_load(f_in).get("sites").get(rse_name)
             if not site_config:
@@ -24,9 +23,9 @@ class Site:
         self.block_to_ipv6 = site_config.get("ipv6_pool", {})
 
         # Pull configured ipv6 blocks from free pool
-        all_ipv6_blocks = self.free_ipv6_pool
         for block in sense_api.get_ipv6_pool(self.sense_name):
             if block in self.block_to_ipv6 and self.block_to_ipv6[block] != self.default_ipv6:
+                logging.debug(f"added {block} to free pool for {self.rse_name}")
                 self.free_ipv6_pool.append(block)
                 
     def add_request(self, partner_name, priority):
