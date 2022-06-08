@@ -6,5 +6,7 @@ Data Movement Manager for the Rucio-SENSE interoperation prototype
 ```
 pip3 install sense-o-api==1.23 yaml
 ```
-2. Copy `.sense-o-auth.yaml.example --> .sense-o-auth.yaml`
-3. Edit `.sense-o-auth.yaml` appropriately
+2. Copy `.sense-o-auth.yaml.example --> ~/.sense-o-auth.yaml`
+3. Edit `~/.sense-o-auth.yaml` appropriately
+4. Run `source setup.sh`
+5. Start DMM `./bin/dmm`
