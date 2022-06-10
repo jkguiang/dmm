@@ -3,7 +3,7 @@ import requests
 import logging
 import time
 
-class PrometheusSession:
+class Prometheus:
     """
     Get network metrics from Prometheus via its HTTP API and return aggregations of 
     those metrics
@@ -14,18 +14,16 @@ class PrometheusSession:
             prometheus_host = prometheus_config["host"]
             prometheus_port = prometheus_config["port"]
         self.prometheus_addr = f"http://{prometheus_host}:{prometheus_port}"
-        self.session = requests.Session()
         self.dev_map = {}
         # Update dev map if prometheus address is reachable
         try:
-            self.session.head(self.prometheus_addr, stream=True)
             self.update_dev_map() 
         except requests.exceptions.ConnectionError as error:
             logging.warning(f"Prometheus unreachable - {error}")
 
     def submit_query(self, query_dict, endpoint="api/v1/query") -> dict:
         query_addr = f"{self.prometheus_addr}/{endpoint}"
-        return self.session.get(query_addr, params=query_dict).json()
+        return requests.get(query_addr, params=query_dict).json()
         
     def update_dev_map(self) -> None:
         """Update IPv6 --> Device Name mapping"""

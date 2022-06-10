@@ -1,6 +1,6 @@
 import time
 import dmm.sense_api as sense_api
-from dmm.monitoring import PrometheusSession
+from dmm.monitoring import Prometheus
 
 class Request:
     def __init__(self, rule_id, src_site, dst_site, transfer_ids, priority, 
@@ -27,7 +27,7 @@ class Request:
         self.dst_ipv6 = ""
         self.bandwidth = 0
         self.history = [(time.time(), self.bandwidth, 0, "init")]
-        self.prometheus = PrometheusSession()
+        self.prometheus = Prometheus()
         self.sense_link_id = ""
         self.theoretical_bandwidth = -1
 
