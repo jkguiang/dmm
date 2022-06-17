@@ -9,7 +9,7 @@ class Prometheus:
     those metrics
     """
     def __init__(self) -> None:
-        with open("config.yaml", "r") as f_in:
+        with open("dmm/config.yaml", "r") as f_in:
             prometheus_config = yaml.safe_load(f_in).get("prometheus")
             prometheus_host = prometheus_config["host"]
             prometheus_port = prometheus_config["port"]
@@ -30,7 +30,7 @@ class Prometheus:
         response = self.submit_query({"query": "node_network_address_info"})
         if response["status"] == "success":
             for metric in response["data"]["result"]:
-                self.dev_map[metric["metric"]["address"]] = metric["metric"]["device"]
+                self.dev_map[metric["metric"]["address"]] = (metric["metric"]["device"], metric["metric"]["instance"])
 
     @staticmethod 
     def get_val_from_response(response):
@@ -42,11 +42,15 @@ class Prometheus:
         Returns the total number of bytes transmitted from a given Rucio RSE via a given
         ipv6 address
         """
-        if self.dev_map[ipv6] is None:
+        try:
+            dev_addr_info = self.dev_map[ipv6]
+        except:
             self.update_dev_map()
-        if self.dev_map[ipv6] is None:
+        try:
+            dev_addr_info = self.dev_map[ipv6]
+        except:
             raise Exception("IPv6 does not exist")
-        params = f"device=\"{self.dev_map[ipv6]}\",job=~\".*{rse_name}.*\""
+        params = f"device=\"{dev_addr_info[0]}\",instance=\"{dev_addr_info[1]}\",job=~\".*{rse_name}.*\""
         metric = f"node_network_transmit_bytes_total{{{params}}}"
         # Get bytes transferred at the start time
         start_response = self.submit_query({"query": metric, "time": start_time})
@@ -60,7 +64,6 @@ class Prometheus:
             bytes_transferred_at_end = self.get_val_from_response(end_response) 
         else:
             raise Exception(f"query {metric} failed")
-
         return (float(bytes_transferred_at_end) - float(bytes_transferred_at_start))
 
     def get_average_throughput(self, ipv6, rse_name, start_time, end_time) -> float:
