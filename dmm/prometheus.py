@@ -9,7 +9,7 @@ class Prometheus:
     those metrics
     """
     def __init__(self) -> None:
-        with open("dmm/config.yaml", "r") as f_in:
+        with open("config.yaml", "r") as f_in:
             prometheus_config = yaml.safe_load(f_in).get("prometheus")
             prometheus_host = prometheus_config["host"]
             prometheus_port = prometheus_config["port"]
@@ -49,7 +49,7 @@ class Prometheus:
         try:
             dev_addr_info = self.dev_map[ipv6]
         except:
-            raise Exception("IPv6 does not exist")
+            raise Exception(f"IPv6 {ipv6} does not exist")
         params = f"device=\"{dev_addr_info[0]}\",instance=\"{dev_addr_info[1]}\",job=~\".*{rse_name}.*\""
         metric = f"node_network_transmit_bytes_total{{{params}}}"
         # Get bytes transferred at the start time

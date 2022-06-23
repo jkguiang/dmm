@@ -1,6 +1,6 @@
 import time
 import dmm.sense_api as sense_api
-from dmm.monitoring import Prometheus
+from dmm.prometheus import Prometheus
 
 class Request:
     def __init__(self, rule_id, src_site, dst_site, transfer_ids, priority, 
@@ -44,14 +44,13 @@ class Request:
         time_now = time.time()
         if monitoring:
             actual_bandwidth = self.prometheus.get_average_throughput(
-                self.src_ipv6,
+                self.src_site.block_to_ipv6[self.src_ipv6].split(']')[0][1:],
                 self.src_site.rse_name,
                 time_last,
                 time_now
             )
         else:
             actual_bandwidth = -1
-
         self.history.append((time_now, self.bandwidth, actual_bandwidth, msg))
 
     def get_summary(self, string=False, monitoring=False):
