@@ -19,6 +19,10 @@ if __name__ == "__main__":
         help="maximum number of worker processes"
     )
     cli.add_argument(
+        "--monit", action="store_true", 
+        help="write FTS logs to tmp"
+    )
+    cli.add_argument(
         "--loglevel", type=str, default="WARNING", 
         help="log level: DEBUG, INFO, WARNING (default), or ERROR"
     )
@@ -41,7 +45,7 @@ if __name__ == "__main__":
     )
 
     # Start DMM
-    dmm = DMM(n_workers=args.n_workers)
+    dmm = DMM(use_monit=args.monit, n_workers=args.n_workers)
     signal.signal(signal.SIGINT, sigint_handler(dmm))
     logging.info("Starting DMM")
     dmm.start()

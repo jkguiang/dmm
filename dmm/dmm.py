@@ -4,9 +4,12 @@ from multiprocessing.connection import Listener
 from dmm.site import Site
 from dmm.request import Request
 from dmm.orchestrator import Orchestrator
+from dmm.monit import FTSmonit
+from dmm.sql.session import SQLSession
 
 class DMM:
-    def __init__(self, n_workers=4):
+    def __init__(self, use_monit, n_workers=4):
+        self.dbsession = SQLSession()
         self.orchestrator = Orchestrator(n_workers=n_workers)
         self.sites = {}
         self.requests = {}
@@ -18,6 +21,9 @@ class DMM:
             self.monitoring = dmm_config.get("monitoring", True)
         with open(authkey_file, "rb") as f_in:
             self.authkey = f_in.read()
+        self.use_monit = use_monit
+        if use_monit:
+            self.ftsmonit = FTSmonit()
 
     def __dump(self):
         for request in self.requests.values():
@@ -32,6 +38,10 @@ class DMM:
         return
 
     def start(self):
+        # Restore state if database is not empty
+        if self.dbsession.query_db():
+            self.requests = self.dbsession.restore_from_curr_state()
+        # Start listener
         listener = Listener((self.host, self.port), authkey=self.authkey)
         while True:
             logging.info("Waiting for the next connection")
@@ -124,6 +134,8 @@ class DMM:
                 # Create new Request
                 request = Request(rule_id, src_site, dst_site, **request_attr)
                 request.register()
+                # Update DB
+                self.dbsession.add_request(request)
                 # Store new request and its corresponding link
                 self.requests[request_id] = request
 
@@ -199,6 +211,10 @@ class DMM:
                 src_rse_name, dst_rse_name = rse_pair_id.split("&")
                 request_id = Request.id(rule_id, src_rse_name, dst_rse_name)
                 request = self.requests[request_id]
+                # # Check performance and request logs
+                if self.use_monit:
+                    if not request.perf_eval(): 
+                        self.ftsmonit.log_request(report["external_ids"])
                 # Update request
                 request.n_transfers_finished += report["n_transfers_finished"]
                 request.n_bytes_transferred += report["n_bytes_transferred"]
@@ -210,6 +226,7 @@ class DMM:
                     self.orchestrator.put(request_id, DMM.link_closer, closer_args)
                     n_link_closures += 1
                     # Clean up
+                    self.dbsession.delete_request(request)
                     self.requests.pop(request_id)
 
         if n_link_closures > 0:

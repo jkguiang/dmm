@@ -9,6 +9,11 @@ prometheus:
   # host: influx.sdn-sense.dev
   host: dummy
   port: 9090
+fts:
+  host: https://fts:8446
+  usercert: /opt/rucio/etc/usercertkey.pem
+sql_db:
+  host: ruciodb
 sites:
   XRD1:
     best_effort_ipv6: 127.0.0.1
@@ -42,6 +47,18 @@ sites:
       "fc00::0030/124": 127.0.0.1
       "fc00::0040/124": 127.0.0.1
       "fc00::0050/124": 127.0.0.1
+  T2_US_SDSC1:
+    best_effort_ipv6: "[2001:48d0:3001:113::300]:1096"
+    ipv6_pool:
+      "2001:48d0:3001:111::/64": "[2001:48d0:3001:111::300]:1094"
+      "2001:48d0:3001:112::/64": "[2001:48d0:3001:112::300]:1095"
+      "2001:48d0:3001:113::/64": "[2001:48d0:3001:113::300]:1096"
+  T2_US_SDSC2:
+    best_effort_ipv6: "[2001:48d0:3001:112::300]:1095"
+    ipv6_pool:
+      "2001:48d0:3001:111::/64": "[2001:48d0:3001:111::300]:1094"
+      "2001:48d0:3001:112::/64": "[2001:48d0:3001:112::300]:1095"
+      "2001:48d0:3001:113::/64": "[2001:48d0:3001:113::300]:1096"
   T2_US_Caltech_Test:
     best_effort_ipv6: sense-origin-03.ultralight.org:1096            # 2605:d9c0:2:fff3::2
     ipv6_pool:
