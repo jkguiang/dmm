@@ -162,11 +162,17 @@ class DMM:
                     req.priority = report["priority"]
                     n_priority_changes += 1
                 # Get SENSE link endpoints
-                sense_map[rule_id][rse_pair_id] = {
-                    # block_to_ipv6 translation is a hack; should not be needed in the future
-                    req.src_site.rse_name: req.src_site.block_to_ipv6[req.src_ipv6],
-                    req.dst_site.rse_name: req.dst_site.block_to_ipv6[req.dst_ipv6]
-                }
+                if req.best_effort:
+                    sense_map[rule_id][rse_pair_id] = {
+                        req.src_site.rse_name: req.src_site.default_ipv6,
+                        req.dst_site.rse_name: req.dst_site.default_ipv6
+                    }
+                else:
+                    sense_map[rule_id][rse_pair_id] = {
+                        # block_to_ipv6 translation is a hack; should not be needed in the future
+                        req.src_site.rse_name: req.src_site.block_to_ipv6[req.src_ipv6],
+                        req.dst_site.rse_name: req.dst_site.block_to_ipv6[req.dst_ipv6]
+                    }
 
         if n_priority_changes > 0:
             self.update_requests("adjusting for priority update")
