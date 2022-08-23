@@ -8,7 +8,7 @@ from dmm.monit import FTSmonit
 from dmm.sql.session import SQLSession
 
 class DMM:
-    def __init__(self, use_monit, n_workers=4):
+    def __init__(self, n_workers=4):
         self.dbsession = SQLSession()
         self.orchestrator = Orchestrator(n_workers=n_workers)
         self.sites = {}
@@ -21,8 +21,7 @@ class DMM:
             self.monitoring = dmm_config.get("monitoring", True)
         with open(authkey_file, "rb") as f_in:
             self.authkey = f_in.read()
-        self.use_monit = use_monit
-        if use_monit:
+        if self.monitoring:
             self.ftsmonit = FTSmonit()
 
     def __dump(self):

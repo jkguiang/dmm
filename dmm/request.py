@@ -121,10 +121,8 @@ class Request:
         returns True if performance above acceptance threshold
         80% acceptance hard coded, #TODO
         """
-        n_events = len(self.history)
-        avg_throughput = sum([event[2] for event in self.history]) / n_events
-        avg_bandwidth = sum([event[1] for event in self.history]) / n_events
-        return (avg_throughput > (0.8 * avg_bandwidth))
+        promise, actual  = self.get_summary(monitoring=True)
+        return (actual > (0.8 * promise))
 
     def get_bandwidth_fraction(self):
         """Return bandwidth fraction
