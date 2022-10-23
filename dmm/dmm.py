@@ -1,3 +1,4 @@
+import os
 import yaml
 import logging
 from multiprocessing.connection import Listener
@@ -12,8 +13,8 @@ class DMM:
         self.requests = {}
         with open("config.yaml", "r") as f_in:
             dmm_config = yaml.safe_load(f_in).get("dmm")
-            self.host = dmm_config.get("host", "localhost")
-            self.port = dmm_config.get("port", 5000)
+            self.host = os.environ.get("DMM_HOST", "localhost")
+            self.port = int(os.environ.get("DMM_PORT", 5000))
             authkey_file = dmm_config.get("authkey", "")
             self.monitoring = dmm_config.get("monitoring", True)
         with open(authkey_file, "rb") as f_in:
